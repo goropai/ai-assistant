@@ -5,7 +5,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$Notes
 )
-$ErrorActionPreference = 'Stop'
+# Помилки нативних команд перевіряємо через $LASTEXITCODE: git пише прогрес у stderr.
+$ErrorActionPreference = 'Continue'
 Set-Location $PSScriptRoot
 
 $gradle = Get-Content app\build.gradle.kts -Raw
@@ -13,6 +14,7 @@ $versionName = [regex]::Match($gradle, 'versionName\s*=\s*"([^"]+)"').Groups[1].
 $tag = "v$versionName"
 
 if (git status --porcelain) { throw "Є незакомічені зміни — спершу закоміть їх." }
+git fetch --tags -q origin
 if (git tag --list $tag) { throw "Тег $tag уже існує — збільш versionName і versionCode." }
 
 .\gradlew.bat updateManifest "-Pnotes=$Notes" --console=plain
