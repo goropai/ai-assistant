@@ -1,0 +1,25 @@
+# Скопіюй у local.properties (його не комітимо — там ключі!).
+# sdk.dir Android Studio пропише сам.
+
+# Який "мозок" використовувати: claude або gemini
+llm.provider=claude
+
+anthropic.apiKey=sk-ant-...
+claude.model=claude-opus-5-5
+# low = найшвидша відповідь для голосу; medium/high — розумніше, але повільніше
+claude.effort=low
+
+gemini.apiKey=
+gemini.model=gemini-2.5-flash
+
+# Голос: висота (1.0 = звичайна) та швидкість мовлення
+tts.pitch=1.3
+tts.rate=1.05
+# Необов'язково: точна назва голосу TTS (див. логи тегу Speaker)
+tts.voice=
+
+# Яскравість екрана 0.0..1.0 (-1 = системна). Менше = довше живе батарея.
+screen.brightness=0.15
+
+# Колісна платформа по Wi-Fi (ESP32 тощо), напр. http://192.168.4.1 ; порожньо = вимкнено
+robot.wifiUrl=
