@@ -26,6 +26,7 @@ import com.speedy.assistant.settings.AppSettings
 import com.speedy.assistant.settings.SettingsDialog
 import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
+import com.speedy.assistant.vision.PresenceWatcher
 import com.speedy.assistant.voice.Speaker
 import com.speedy.assistant.voice.VoiceListener
 import okhttp3.OkHttpClient
@@ -36,6 +37,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var face: FaceView
     private var speaker: Speaker? = null
     private var assistant: Assistant? = null
+    private var presence: PresenceWatcher? = null
+    private var assistantBusy = false
+    private var lowPower = false
+    private var resumed = false
     private val settings by lazy { AppSettings(this) }
     private val robot by lazy {
         // Короткі таймаути: якщо плата зникла, рух не має "висіти" 15 секунд.
@@ -92,12 +97,13 @@ class MainActivity : AppCompatActivity() {
         if (assistant != null) return
         val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
         speaker = voice
+        presence = PresenceWatcher(this, this) { events -> assistant?.onPresence(events) }
 
         assistant = Assistant(
             scope = lifecycleScope,
             face = face,
             voice = voice,
-            brain = Brain(ConfiguredLlm(http, settings)),
+            brain = Brain(ConfiguredLlm(http, settings), presence = { presence?.summary.orEmpty() }),
             camera = CameraSnapshot(this, this),
             robot = robot,
             findRobot = { robot.rediscover() },
@@ -107,6 +113,10 @@ class MainActivity : AppCompatActivity() {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
                 }
             },
+            onBusyChanged = { busy ->
+                assistantBusy = busy
+                updatePresence()
+            },
         ).also {
             it.start()
             it.checkUpdatesOnLaunch()
@@ -114,6 +124,7 @@ class MainActivity : AppCompatActivity() {
         // Тихо оновити адресу платформи: роутер міг видати їй нову IP.
         lifecycleScope.launch { robot.rediscover() }
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        updatePresence()
         if (!settings.hasActiveKey) {
             face.setMood(Mood.SAD)
             toast("Додай API-ключ у налаштуваннях")
@@ -124,16 +135,30 @@ class MainActivity : AppCompatActivity() {
     private fun openSettings() {
         SettingsDialog.show(this, settings) {
             face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
+            updatePresence()
         }
+    }
+
+    /** Камера для присутності — лише коли Спіді вільна, екран активний і батарея не сідає. */
+    private fun updatePresence() {
+        val watcher = presence ?: return
+        val cameraAllowed = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+        if (settings.presenceEnabled && cameraAllowed && resumed && !assistantBusy && !lowPower) watcher.start()
+        else watcher.stop()
     }
 
     override fun onResume() {
         super.onResume()
         hideSystemUi()
         assistant?.start()
+        resumed = true
+        updatePresence()
     }
 
     override fun onPause() {
+        resumed = false
+        updatePresence()
         assistant?.stop()
         super.onPause()
     }
@@ -146,13 +171,21 @@ class MainActivity : AppCompatActivity() {
             val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
             if (level < 0 || scale <= 0) return
             val charging = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
-            batteryAlerts.update(level * 100 / scale, charging)?.let { assistant?.announceLowBattery(level * 100 / scale) }
+            val percent = level * 100 / scale
+            batteryAlerts.update(percent, charging)?.let { assistant?.announceLowBattery(percent) }
+            // Нижче 15% без зарядки — камеру для присутності вимикаємо.
+            val low = percent < 15 && !charging
+            if (low != lowPower) {
+                lowPower = low
+                updatePresence()
+            }
         }
     }
 
     override fun onDestroy() {
         if (assistant != null) unregisterReceiver(batteryReceiver)
         assistant?.release()
+        presence?.release()
         speaker?.shutdown()
         super.onDestroy()
     }

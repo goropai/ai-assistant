@@ -39,6 +39,11 @@ class AppSettings(context: Context) {
         get() = prefs.getString("robot_found_url", null).orEmpty()
         set(value) = prefs.edit().putString("robot_found_url", value).apply()
 
+    /** Локальне розпізнавання людей і тварин фронтальною камерою. */
+    var presenceEnabled: Boolean
+        get() = prefs.getBoolean("presence", true)
+        set(value) = prefs.edit().putBoolean("presence", value).apply()
+
     val hasActiveKey: Boolean
         get() = if (provider == "gemini") geminiKey.isNotBlank() else anthropicKey.isNotBlank()
 }

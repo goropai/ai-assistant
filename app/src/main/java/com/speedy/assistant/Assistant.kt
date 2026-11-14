@@ -14,6 +14,8 @@ import com.speedy.assistant.robot.RobotPlatform
 import com.speedy.assistant.update.UpdateInfo
 import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
+import com.speedy.assistant.vision.Kind
+import com.speedy.assistant.vision.PresenceEvent
 import com.speedy.assistant.voice.Speaker
 import com.speedy.assistant.voice.VoiceListener
 import com.speedy.assistant.voice.WakeWord
@@ -38,6 +40,8 @@ class Assistant(
     private val findRobot: suspend () -> String?,
     private val updater: UpdateManager,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
+    /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
+    private val onBusyChanged: (Boolean) -> Unit = {},
 ) {
     private val ears = earsFactory(::onHeard)
     private var busy = false
@@ -88,6 +92,41 @@ class Assistant(
         }
     }
 
+    /** Події від локальної моделі присутності. */
+    fun onPresence(events: List<PresenceEvent>) {
+        if (busy) return
+        for (event in events) {
+            when (event) {
+                is PresenceEvent.Look -> face.lookAt(event.x, event.y)
+                is PresenceEvent.Arrived -> {
+                    runBusy { greetArrival(event.kind) }
+                    return
+                }
+                PresenceEvent.Lost -> face.lookAt(0f, 0f)
+            }
+        }
+    }
+
+    private suspend fun greetArrival(kind: Kind) {
+        when (kind) {
+            Kind.PERSON -> {
+                face.setMood(Mood.HAPPY)
+                say(listOf("Привіт!", "О, привіт! Я тут.", "Рада тебе бачити!").random())
+                // Можна одразу казати команду, без "Спіді".
+                face.setMood(Mood.LISTENING)
+                awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
+            }
+            Kind.CAT -> {
+                face.setMood(Mood.SURPRISED)
+                say(listOf("Ой, котик!", "Кіця! Привіт, пухнастику.").random())
+            }
+            Kind.DOG -> {
+                face.setMood(Mood.SURPRISED)
+                say(listOf("Ой, песик!", "Привіт, собачко!").random())
+            }
+        }
+    }
+
     /**
      * Дотик до екрана: у спокої — звертання "Спіді"; поки Спіді зайнята (їде, говорить,
      * думає) — негайна зупинка. Під час руху мікрофон вимкнено, тож це головний "стоп".
@@ -115,6 +154,7 @@ class Assistant(
 
     private fun runBusy(block: suspend () -> Unit) {
         busy = true
+        onBusyChanged(true)
         ears.stop() // не слухаємо самих себе
         idleJob?.cancel()
         commandJob = scope.launch {
@@ -130,6 +170,7 @@ class Assistant(
             } finally {
                 face.setSpeaking(false)
                 busy = false
+                onBusyChanged(false)
                 ears.start()
                 scheduleIdle()
             }

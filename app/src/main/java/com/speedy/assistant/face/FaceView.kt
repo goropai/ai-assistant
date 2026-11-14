@@ -44,6 +44,7 @@ class FaceView @JvmOverloads constructor(
     private val blinkMs = 160L
 
     private var speaking = false
+    private var lookUntil = 0L
 
     var mood: Mood = Mood.NEUTRAL
         private set
@@ -64,6 +65,12 @@ class FaceView @JvmOverloads constructor(
         if (speaking == value) return
         speaking = value
         postInvalidateOnAnimation()
+    }
+
+    /** Подивитися в точку (-1..1, x вправо, y вниз) — напр. на людину в кадрі. */
+    fun lookAt(x: Float, y: Float) {
+        lookUntil = SystemClock.uptimeMillis() + LOOK_HOLD_MS
+        animateTo(EyeShape.of(mood).withGaze(x.coerceIn(-1f, 1f) * 0.6f, y.coerceIn(-1f, 1f) * 0.4f))
     }
 
     fun blink() {
@@ -97,7 +104,7 @@ class FaceView @JvmOverloads constructor(
 
     private val glanceLoop = object : Runnable {
         override fun run() {
-            if (mood == Mood.NEUTRAL || mood == Mood.LISTENING) {
+            if ((mood == Mood.NEUTRAL || mood == Mood.LISTENING) && SystemClock.uptimeMillis() > lookUntil) {
                 val base = EyeShape.of(mood)
                 val look = Random.nextFloat() < 0.6f
                 animateTo(
@@ -183,5 +190,10 @@ class FaceView @JvmOverloads constructor(
             lidRect.set(cx - w * 0.8f, top, cx + w * 0.8f, top + h * 1.2f)
             canvas.drawOval(lidRect, lidPaint)
         }
+    }
+
+    private companion object {
+        /** Скільки тримати погляд на об'єкті, перш ніж знову "розглядатися". */
+        const val LOOK_HOLD_MS = 3000L
     }
 }

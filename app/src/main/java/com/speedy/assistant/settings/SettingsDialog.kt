@@ -4,6 +4,7 @@ import android.content.Context
 import android.text.InputType
 import android.view.View
 import android.view.ViewGroup
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.RadioButton
@@ -59,6 +60,12 @@ object SettingsDialog {
         label("Колісна платформа (порожньо = автопошук)")
         val robotUrl = field(settings.robotUrl, settings.robotFoundUrl.ifBlank { "автопошук" })
 
+        val presence = CheckBox(context).apply {
+            text = "Помічати людей і тварин камерою (працює на телефоні)"
+            isChecked = settings.presenceEnabled
+        }
+        form.addView(presence)
+
         AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
             .setTitle("Спіді ${BuildConfig.VERSION_NAME}")
             .setView(ScrollView(context).apply { addView(form) })
@@ -69,6 +76,7 @@ object SettingsDialog {
                 settings.geminiKey = geminiKey.text.toString()
                 settings.geminiModel = geminiModel.text.toString()
                 settings.robotUrl = robotUrl.text.toString()
+                settings.presenceEnabled = presence.isChecked
                 onSaved()
             }
             .setNegativeButton("Скасувати", null)

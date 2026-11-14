@@ -31,8 +31,11 @@ android {
         applicationId = "com.speedy.assistant"
         minSdk = 25 // Android 7.1
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
+
+        // Нативні бібліотеки TensorFlow Lite лише для ARM — менший APK.
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
 
         buildConfigField("String", "CLAUDE_MODEL", quoted(prop("claude.model", "claude-opus-5-5")))
         buildConfigField("String", "CLAUDE_EFFORT", quoted(prop("claude.effort", "low")))
@@ -76,6 +79,11 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    androidResources {
+        // Модель має читатися з APK напряму (memory-map), без стиснення.
+        noCompress += "tflite"
+    }
+
     buildFeatures {
         buildConfig = true
     }
@@ -101,6 +109,9 @@ dependencies {
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
+
+    // Локальне розпізнавання присутності (EfficientDet-Lite0 у assets)
+    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
 
     testImplementation("junit:junit:4.13.2")
     // Справжній org.json для JVM-тестів (в android.jar лише заглушки).

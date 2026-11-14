@@ -8,6 +8,8 @@ import java.util.Locale
 class Brain(
     private val llm: LlmClient,
     private val maxTurns: Int = 16,
+    /** Що Спіді зараз бачить поруч (локальна модель) — додається до кожного запиту. */
+    private val presence: () -> String = { "" },
 ) {
     private val history = ArrayList<Turn>()
     private val clock = SimpleDateFormat("HH:mm, EEEE d MMMM", Locale("uk", "UA"))
@@ -15,7 +17,8 @@ class Brain(
     suspend fun ask(text: String, image: ByteArray? = null): AgentReply {
         val parts = buildList {
             image?.let { add(Part.Image(it)) }
-            add(Part.Text("[${clock.format(Date())}] $text"))
+            val nearby = presence().takeIf { it.isNotBlank() }?.let { " [поруч: $it]" }.orEmpty()
+            add(Part.Text("[${clock.format(Date())}]$nearby $text"))
         }
         history += Turn(Role.USER, parts)
         val raw = try {
