@@ -2,6 +2,7 @@ package com.speedy.assistant.settings
 
 import android.content.Context
 import android.text.InputType
+import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -37,13 +38,13 @@ object SettingsDialog {
         }
 
         label("Мозок")
-        val claude = RadioButton(context).apply { text = "Claude"; id = 1 }
-        val gemini = RadioButton(context).apply { text = "Gemini"; id = 2 }
+        val claude = RadioButton(context).apply { text = "Claude"; id = View.generateViewId() }
+        val gemini = RadioButton(context).apply { text = "Gemini"; id = View.generateViewId() }
         val providers = RadioGroup(context).apply {
             orientation = RadioGroup.HORIZONTAL
             addView(claude)
             addView(gemini)
-            check(if (settings.provider == "gemini") 2 else 1)
+            check(if (settings.provider == "gemini") gemini.id else claude.id)
         }
         form.addView(providers)
 
@@ -62,7 +63,7 @@ object SettingsDialog {
             .setTitle("Спіді ${BuildConfig.VERSION_NAME}")
             .setView(ScrollView(context).apply { addView(form) })
             .setPositiveButton("Зберегти") { _, _ ->
-                settings.provider = if (providers.checkedRadioButtonId == 2) "gemini" else "claude"
+                settings.provider = if (providers.checkedRadioButtonId == gemini.id) "gemini" else "claude"
                 settings.anthropicKey = anthropicKey.text.toString()
                 settings.claudeModel = claudeModel.text.toString()
                 settings.geminiKey = geminiKey.text.toString()

@@ -33,6 +33,7 @@ class FaceView @JvmOverloads constructor(
     private var eyeW = 0f
     private var eyeH = 0f
     private var eyeSpacing = 0f
+    private var centerY = 0f
 
     private var from = EyeShape.of(Mood.NEUTRAL)
     private var to = from
@@ -122,9 +123,12 @@ class FaceView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        eyeW = min(w * 0.22f, h * 0.42f)
+        // Ширина ока обмежена і шириною, і висотою — так очі добре виглядають в обох орієнтаціях.
+        eyeW = min(w * 0.28f, h * 0.42f)
         eyeH = min(eyeW * 1.3f, h * 0.55f)
         eyeSpacing = min(w * 0.2f, eyeW * 1.1f)
+        // У вертикальному режимі очі трохи вище центру — як на обличчі.
+        centerY = if (h > w) h * 0.42f else h / 2f
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -158,7 +162,7 @@ class FaceView @JvmOverloads constructor(
     private fun drawEye(canvas: Canvas, left: Boolean, s: EyeShape, blink: Float, bob: Float) {
         val side = if (left) -1f else 1f
         val cx = width / 2f + side * eyeSpacing + s.gazeX * eyeW * 0.6f
-        val cy = height / 2f + s.gazeY * eyeH * 0.5f - bob * eyeH
+        val cy = centerY + s.gazeY * eyeH * 0.5f - bob * eyeH
         val w = eyeW * s.scaleX
         val h = eyeH * s.scaleY * blink * (1f + bob)
 
@@ -169,14 +173,14 @@ class FaceView @JvmOverloads constructor(
         if (s.topLid > 0.01f) {
             canvas.save()
             canvas.rotate(if (left) s.lidAngle else -s.lidAngle, cx, cy)
-            lidRect.set(cx - w, cy - h * 1.5f, cx + w, eyeRect.top + h * s.topLid)
+            lidRect.set(cx - w * 0.8f, cy - h * 1.5f, cx + w * 0.8f, eyeRect.top + h * s.topLid)
             canvas.drawRect(lidRect, lidPaint)
             canvas.restore()
         }
 
         if (s.bottomLid > 0.01f) {
             val top = eyeRect.bottom - h * s.bottomLid
-            lidRect.set(cx - w * 0.9f, top, cx + w * 0.9f, top + h * 1.2f)
+            lidRect.set(cx - w * 0.8f, top, cx + w * 0.8f, top + h * 1.2f)
             canvas.drawOval(lidRect, lidPaint)
         }
     }
