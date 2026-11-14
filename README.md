@@ -57,7 +57,7 @@ API-ключі навмисно не вшиваються в APK: релізи �
 .elease.ps1 -Notes "що нового"
 ```
 Скрипт збирає підписаний APK, генерує `update.json` і публікує реліз на GitHub. Застосунок читає
-`https://github.com/goropai/speedy/releases/latest/download/update.json` (`speedy.updateManifestUrl`
+`https://github.com/goropai/ai-assistant/releases/latest/download/update.json` (`speedy.updateManifestUrl`
 у `gradle.properties`).
 
 Ключ підпису (`signing.properties` у `local.properties`) підписує і debug, і release, тож оновлення
