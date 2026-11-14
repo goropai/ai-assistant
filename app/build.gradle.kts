@@ -103,6 +103,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
 
     testImplementation("junit:junit:4.13.2")
+    // Справжній org.json для JVM-тестів (в android.jar лише заглушки).
+    testImplementation("org.json:json:20240303")
 }
 
 /**

@@ -7,11 +7,13 @@ import org.json.JSONObject
 data class AgentAction(
     /** none | look | move | stop */
     val type: String = "none",
-    /** none | back | front */
+    /** none | forward (фронтальна, з боку очей) | backward (задня) */
     val camera: String = "none",
     /** none | forward | backward | left | right */
     val direction: String = "none",
     val durationMs: Long = 0,
+    /** Після руху зробити новий кадр спереду і продовжити (навігація до мети). */
+    val thenLook: Boolean = false,
 )
 
 /** Структурована відповідь моделі: що сказати, з яким настроєм і що зробити. */
@@ -33,14 +35,22 @@ data class AgentReply(
                     mood = Mood.parse(json.optString("mood")),
                     action = AgentAction(
                         type = a?.optString("type", "none") ?: "none",
-                        camera = a?.optString("camera", "none") ?: "none",
+                        camera = normalizeCamera(a?.optString("camera", "none")),
                         direction = a?.optString("direction", "none") ?: "none",
                         durationMs = a?.optLong("duration_ms", 0) ?: 0,
+                        thenLook = a?.optBoolean("then_look", false) ?: false,
                     ),
                 )
             } catch (e: Exception) {
                 AgentReply(raw.trim(), Mood.NEUTRAL, AgentAction())
             }
+        }
+
+        /** Підтримка старих назв: front/back -> forward/backward. */
+        fun normalizeCamera(value: String?): String = when (value?.lowercase()) {
+            "forward", "front" -> "forward"
+            "backward", "back" -> "backward"
+            else -> "none"
         }
 
         /** JSON Schema для structured outputs (Claude). */
@@ -53,11 +63,12 @@ data class AgentReply(
                 .put(
                     "properties", JSONObject()
                         .put("type", enumOf("none", "look", "move", "stop"))
-                        .put("camera", enumOf("none", "back", "front"))
+                        .put("camera", enumOf("none", "forward", "backward"))
                         .put("direction", enumOf("none", "forward", "backward", "left", "right"))
                         .put("duration_ms", JSONObject().put("type", "integer"))
+                        .put("then_look", JSONObject().put("type", "boolean"))
                 )
-                .put("required", JSONArray(listOf("type", "camera", "direction", "duration_ms")))
+                .put("required", JSONArray(listOf("type", "camera", "direction", "duration_ms", "then_look")))
                 .put("additionalProperties", false)
 
             return JSONObject()

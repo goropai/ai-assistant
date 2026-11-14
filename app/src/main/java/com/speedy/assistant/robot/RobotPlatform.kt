@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONObject
 
 enum class Direction { FORWARD, BACKWARD, LEFT, RIGHT;
 
@@ -13,12 +14,41 @@ enum class Direction { FORWARD, BACKWARD, LEFT, RIGHT;
     }
 }
 
+enum class MoveResult {
+    OK,
+    /** Платформа відмовилась їхати вперед: датчик бачить перешкоду. */
+    BLOCKED,
+    /** Платформа не відповідає. */
+    UNREACHABLE,
+}
+
+data class RobotStatus(
+    /** Відстань до перешкоди попереду, см; null — датчика немає або попереду вільно (>4 м). */
+    val distanceCm: Int?,
+    val moving: Boolean,
+    /** Остання подія: forward/left/…/stop/obstacle (обов'язково "obstacle", якщо зупинилась сама). */
+    val last: String,
+) {
+    companion object {
+        fun parse(json: String): RobotStatus? = try {
+            val o = JSONObject(json)
+            RobotStatus(
+                distanceCm = o.optInt("distance_cm", -1).takeIf { it > 0 },
+                moving = o.optBoolean("moving"),
+                last = o.optString("last", ""),
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+
 /** Колісна платформа. Реалізації: Wi-Fi (ESP32 тощо) та USB-serial (Arduino тощо). */
 interface RobotPlatform {
     val name: String
-    suspend fun isConnected(): Boolean
+    suspend fun status(): RobotStatus?
+    suspend fun move(direction: Direction, durationMs: Long, speed: Int = 60): MoveResult
     /** @return true, якщо платформа прийняла команду. */
-    suspend fun move(direction: Direction, durationMs: Long, speed: Int = 60): Boolean
     suspend fun stop(): Boolean
 
     companion object {
@@ -29,19 +59,19 @@ interface RobotPlatform {
 
 object NoRobot : RobotPlatform {
     override val name = "none"
-    override suspend fun isConnected() = false
-    override suspend fun move(direction: Direction, durationMs: Long, speed: Int): Boolean {
+    override suspend fun status(): RobotStatus? = null
+    override suspend fun move(direction: Direction, durationMs: Long, speed: Int): MoveResult {
         Log.i("NoRobot", "move $direction ${durationMs}ms (платформа не підключена)")
-        return false
+        return MoveResult.UNREACHABLE
     }
     override suspend fun stop() = false
 }
 
 /**
  * Простий HTTP-протокол для мікроконтролера в тій самій Wi-Fi мережі:
- *   GET /move?dir=forward&ms=800&speed=60
+ *   GET /move?dir=forward&ms=800&speed=60  -> 200, або 409 якщо попереду перешкода
  *   GET /stop
- *   GET /status   -> 200 OK
+ *   GET /status   -> {"distance_cm":42,"moving":false,"last":"obstacle",...}
  * Мікроконтролер сам зупиняє мотори через `ms` — навіть якщо зв'язок пропаде.
  */
 class WifiRobotPlatform(
@@ -51,21 +81,30 @@ class WifiRobotPlatform(
     private val base = baseUrl.trimEnd('/')
     override val name = "wifi:$base"
 
-    override suspend fun isConnected(): Boolean = get("/status")
+    override suspend fun status(): RobotStatus? =
+        get("/status")?.takeIf { it.first == 200 }?.let { RobotStatus.parse(it.second) }
 
-    override suspend fun move(direction: Direction, durationMs: Long, speed: Int): Boolean {
+    override suspend fun move(direction: Direction, durationMs: Long, speed: Int): MoveResult {
         val ms = durationMs.coerceIn(0, RobotPlatform.MAX_MOVE_MS)
-        return get("/move?dir=${direction.name.lowercase()}&ms=$ms&speed=${speed.coerceIn(0, 100)}")
+        val response = get("/move?dir=${direction.name.lowercase()}&ms=$ms&speed=${speed.coerceIn(0, 100)}")
+        return when (response?.first) {
+            200 -> MoveResult.OK
+            409 -> MoveResult.BLOCKED
+            else -> MoveResult.UNREACHABLE
+        }
     }
 
-    override suspend fun stop(): Boolean = get("/stop")
+    override suspend fun stop(): Boolean = get("/stop")?.first == 200
 
-    private suspend fun get(path: String): Boolean = withContext(Dispatchers.IO) {
+    /** @return код і тіло відповіді або null, якщо плата не відповіла. */
+    private suspend fun get(path: String): Pair<Int, String>? = withContext(Dispatchers.IO) {
         try {
-            http.newCall(Request.Builder().url(base + path).build()).execute().use { it.isSuccessful }
+            http.newCall(Request.Builder().url(base + path).build()).execute().use {
+                it.code to it.body?.string().orEmpty()
+            }
         } catch (e: Exception) {
             Log.w("WifiRobot", "$path failed: ${e.message}")
-            false
+            null
         }
     }
 }
@@ -95,18 +134,22 @@ class AutoRobotPlatform(
         return found
     }
 
-    override suspend fun isConnected(): Boolean = withPlatform { it.isConnected() }
+    override suspend fun status(): RobotStatus? = retrying(null, { it == null }) { it.status() }
 
-    override suspend fun move(direction: Direction, durationMs: Long, speed: Int): Boolean =
-        withPlatform { it.move(direction, durationMs, speed) }
+    override suspend fun move(direction: Direction, durationMs: Long, speed: Int): MoveResult =
+        retrying(MoveResult.UNREACHABLE, { it == MoveResult.UNREACHABLE }) { it.move(direction, durationMs, speed) }
 
-    override suspend fun stop(): Boolean = withPlatform { it.stop() }
+    override suspend fun stop(): Boolean = retrying(false, { !it }) { it.stop() }
 
-    private suspend fun withPlatform(action: suspend (RobotPlatform) -> Boolean): Boolean {
-        val url = currentUrl() ?: rediscover() ?: return false
-        if (action(WifiRobotPlatform(http, url))) return true
-        if (manualUrl().isNotBlank()) return false
-        val fresh = rediscover()?.takeIf { it != url } ?: return false
+    private suspend fun <T> retrying(
+        unreachable: T,
+        failed: (T) -> Boolean,
+        action: suspend (RobotPlatform) -> T,
+    ): T {
+        val url = currentUrl() ?: rediscover() ?: return unreachable
+        val first = action(WifiRobotPlatform(http, url))
+        if (!failed(first) || manualUrl().isNotBlank()) return first
+        val fresh = rediscover()?.takeIf { it != url } ?: return first
         return action(WifiRobotPlatform(http, fresh))
     }
 }

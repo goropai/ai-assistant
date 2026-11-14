@@ -2,8 +2,9 @@
 //
 // HTTP-протокол (той самий, що в RobotPlatform.kt):
 //   GET /move?dir=forward|backward|left|right&ms=0..3000&speed=0..100
+//       -> 409 {"error":"obstacle"}, якщо вперед не можна: датчик бачить перешкоду
 //   GET /stop
-//   GET /status  -> {"ok":true,...}
+//   GET /status  -> {"ok":true,"distance_cm":42,"moving":false,"last":"obstacle",...}
 //
 // Автопошук: UDP-порт 4210, на запит "SPEEDY_DISCOVER" плата відповідає "SPEEDY_ROBOT 80".
 //
@@ -53,6 +54,15 @@ constexpr uint32_t DEFAULT_MOVE_MS = 500;
 // L9110S (~0.8 А) легко перевантажити. 0 -> 100% приблизно за 150 мс.
 constexpr int RAMP_STEP = 7;
 constexpr uint32_t RAMP_INTERVAL_MS = 10;
+
+// Ультразвуковий датчик HC-SR04 спереду. ECHO у HC-SR04 видає 5 В — лише через дільник
+// 1 кОм / 2 кОм (або бери HC-SR04P / RCWL-1601, що працюють від 3.3 В).
+// Без датчика пін ECHO притягнутий до землі, відстань = -1, і їзда працює як раніше.
+constexpr int SONAR_TRIG = 22;
+constexpr int SONAR_ECHO = 23;
+constexpr int STOP_DISTANCE_CM = 25;
+constexpr uint32_t SONAR_INTERVAL_MS = 60;  // HC-SR04 радять не частіше ~60 мс
+int lastDistanceCm = -1;
 
 WebServer server(80);
 WiFiUDP discovery;
@@ -117,12 +127,48 @@ void sendJson(int code, const String& body) {
   server.send(code, "application/json", body);
 }
 
+// @return відстань у см або -1 (датчика немає / попереду вільно далі ~4 м).
+int measureDistanceCm() {
+  digitalWrite(SONAR_TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(SONAR_TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(SONAR_TRIG, LOW);
+  unsigned long us = pulseIn(SONAR_ECHO, HIGH, 25000);  // ~4 м
+  lastDistanceCm = us == 0 ? -1 : (int)(us / 58);
+  return lastDistanceCm;
+}
+
+bool obstacleAhead() {
+  int d = measureDistanceCm();
+  return d > 0 && d < STOP_DISTANCE_CM;
+}
+
+// Під час руху вперед — міряємо і зупиняємось перед перешкодою (без участі телефона).
+void watchObstacles() {
+  static uint32_t last = 0;
+  if (!(targetLeft > 0 && targetRight > 0)) return;
+  if (millis() - last < SONAR_INTERVAL_MS) return;
+  last = millis();
+  if (obstacleAhead()) {
+    stopMotors();
+    lastCommand = "obstacle";
+    Serial.printf("obstacle at %d cm, stop\n", lastDistanceCm);
+  }
+}
+
 void handleMove() {
   String dir = server.arg("dir");
   uint32_t ms = server.hasArg("ms") ? server.arg("ms").toInt() : DEFAULT_MOVE_MS;
   int speed = server.hasArg("speed") ? server.arg("speed").toInt() : 60;
   ms = min(ms, MAX_MOVE_MS);
   speed = constrain(speed, 0, 100);
+
+  if (dir == "forward" && obstacleAhead()) {
+    sendJson(409, String("{\"ok\":false,\"error\":\"obstacle\",\"distance_cm\":") + lastDistanceCm + "}");
+    lastCommand = "obstacle";
+    return;
+  }
 
   if (dir == "forward") drive(speed, speed);
   else if (dir == "backward") drive(-speed, -speed);
@@ -136,7 +182,7 @@ void handleMove() {
   moving = ms > 0;
   moveDeadline = millis() + ms;
   lastCommand = dir;
-  Serial.printf("move %s %ums speed %d\n", dir.c_str(), ms, speed);
+  Serial.printf("move %s %lums speed %d\n", dir.c_str(), (unsigned long)ms, speed);
   sendJson(200, "{\"ok\":true}");
 }
 
@@ -148,9 +194,11 @@ void handleStop() {
 }
 
 void handleStatus() {
+  measureDistanceCm();
   String ip = WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
   sendJson(200, String("{\"ok\":true,\"ip\":\"") + ip +
                     "\",\"rssi\":" + WiFi.RSSI() +
+                    ",\"distance_cm\":" + lastDistanceCm +
                     ",\"moving\":" + (moving ? "true" : "false") +
                     ",\"last\":\"" + lastCommand +
                     "\",\"uptime_s\":" + (millis() / 1000) + "}");
@@ -194,6 +242,8 @@ void handleDiscovery() {
 
 void setup() {
   Serial.begin(115200);
+  pinMode(SONAR_TRIG, OUTPUT);
+  pinMode(SONAR_ECHO, INPUT_PULLDOWN);
   stopMotors();
 
   connectWifi();
@@ -210,6 +260,7 @@ void loop() {
   server.handleClient();
   handleDiscovery();
   rampMotors();
+  watchObstacles();
 
   if (moving && (int32_t)(millis() - moveDeadline) >= 0) {
     stopMotors();

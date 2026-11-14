@@ -9,6 +9,7 @@ import com.speedy.assistant.brain.MissingKeyException
 import com.speedy.assistant.face.FaceView
 import com.speedy.assistant.face.Mood
 import com.speedy.assistant.robot.Direction
+import com.speedy.assistant.robot.MoveResult
 import com.speedy.assistant.robot.RobotPlatform
 import com.speedy.assistant.update.UpdateInfo
 import com.speedy.assistant.update.UpdateManager
@@ -42,6 +43,7 @@ class Assistant(
     private var busy = false
     private var awaitingCommandUntil = 0L
     private var idleJob: Job? = null
+    private var commandJob: Job? = null
 
     fun start() {
         if (!busy) ears.start()
@@ -86,10 +88,20 @@ class Assistant(
         }
     }
 
-    /** Дотик до екрана = звертання "Спіді" (зручно для тестів у шумі). */
+    /**
+     * Дотик до екрана: у спокої — звертання "Спіді"; поки Спіді зайнята (їде, говорить,
+     * думає) — негайна зупинка. Під час руху мікрофон вимкнено, тож це головний "стоп".
+     */
     fun manualWake() {
-        if (busy) return
-        runBusy { greet() }
+        if (busy) interrupt() else runBusy { greet() }
+    }
+
+    private fun interrupt() {
+        commandJob?.cancel()
+        voice.stop()
+        scope.launch { robot.stop() }
+        face.setSpeaking(false)
+        face.setMood(Mood.NEUTRAL)
     }
 
     private fun onHeard(candidates: List<String>) {
@@ -105,7 +117,7 @@ class Assistant(
         busy = true
         ears.stop() // не слухаємо самих себе
         idleJob?.cancel()
-        scope.launch {
+        commandJob = scope.launch {
             try {
                 block()
             } catch (e: CancellationException) {
@@ -147,41 +159,72 @@ class Assistant(
 
         face.setMood(Mood.THINKING)
         var reply = brain.ask(command)
-
-        // Модель може попросити подивитись камерою — тоді питаємо ще раз уже з кадром.
         var looks = 0
-        while (reply.action.type == "look" && looks++ < MAX_LOOKS) {
-            if (reply.say.isNotBlank()) speak(reply)
-            face.setMood(Mood.THINKING)
-            val front = reply.action.camera == "front"
-            val jpeg = try {
-                camera.take(front)
-            } catch (e: Exception) {
-                Log.e(TAG, "camera failed", e)
-                face.setMood(Mood.SAD)
-                say("Не вдалося увімкнути камеру.")
-                return
-            }
-            reply = brain.ask(Brain.cameraFollowUp(reply.action.camera), jpeg)
-        }
+        var steps = 0
 
-        when (reply.action.type) {
-            "move" -> {
-                val direction = Direction.parse(reply.action.direction)
-                // Рух паралельно з мовленням.
-                val moving = direction?.let { scope.async { robot.move(it, reply.action.durationMs) } }
-                speak(reply)
-                if (moving != null && !moving.await()) {
-                    face.setMood(Mood.SAD)
-                    say("Ой, я не бачу своїх коліс. Скажи «Спіді, знайди платформу».")
+        // Агентний цикл: модель може подивитись, поїхати й знову подивитись, поки не досягне мети.
+        while (true) {
+            val action = reply.action
+            when (action.type) {
+                "look" -> {
+                    if (looks++ >= MAX_LOOKS) return speak(reply)
+                    if (reply.say.isNotBlank()) speak(reply)
+                    face.setMood(Mood.THINKING)
+                    val jpeg = photo(action.camera) ?: return
+                    reply = brain.ask(Brain.cameraFollowUp(action.camera), jpeg)
                 }
+                "move" -> {
+                    val direction = Direction.parse(action.direction) ?: return speak(reply)
+                    val ms = action.durationMs.coerceIn(0, RobotPlatform.MAX_MOVE_MS)
+                    // Рух паралельно з мовленням.
+                    val moving = scope.async { robot.move(direction, ms) }
+                    speak(reply)
+                    val result = moving.await()
+                    if (result == MoveResult.UNREACHABLE) {
+                        face.setMood(Mood.SAD)
+                        return say("Ой, я не бачу своїх коліс. Скажи «Спіді, знайди платформу».")
+                    }
+                    if (!action.thenLook) {
+                        if (result == MoveResult.BLOCKED) {
+                            face.setMood(Mood.SURPRISED)
+                            say("Попереду перешкода, далі не їду.")
+                        }
+                        return
+                    }
+                    if (++steps > Brain.MAX_NAV_STEPS) {
+                        face.setMood(Mood.NEUTRAL)
+                        return say("Я зробила ${Brain.MAX_NAV_STEPS} кроків і зупиняюсь. Скажи, якщо їхати далі.")
+                    }
+                    // HTTP-відповідь приходить одразу, а платформа їде ще ms — чекаємо, поки зупиниться.
+                    if (result == MoveResult.OK) delay(ms + SETTLE_MS)
+                    face.setMood(Mood.THINKING)
+                    val jpeg = photo("forward") ?: return
+                    val status = robot.status()
+                    val outcome = when {
+                        result == MoveResult.BLOCKED -> "не поїхала: перешкода надто близько"
+                        status?.last == "obstacle" -> "зупинилась раніше перед перешкодою"
+                        else -> "виконано"
+                    }
+                    reply = brain.ask(Brain.navFollowUp(action.direction, ms, outcome, status?.distanceCm, steps), jpeg)
+                }
+                "stop" -> {
+                    robot.stop()
+                    return speak(reply)
+                }
+                else -> return speak(reply)
             }
-            "stop" -> {
-                robot.stop()
-                speak(reply)
-            }
-            else -> speak(reply)
         }
+    }
+
+    private suspend fun photo(camera: String): ByteArray? = try {
+        this.camera.take(front = camera != "backward")
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.e(TAG, "camera failed", e)
+        face.setMood(Mood.SAD)
+        say("Не вдалося увімкнути камеру.")
+        null
     }
 
     private suspend fun findPlatform() {
@@ -275,7 +318,8 @@ class Assistant(
         const val TAG = "Assistant"
         const val FOLLOW_UP_WINDOW_MS = 8_000L
         const val SLEEP_AFTER_MS = 5 * 60_000L
-        const val MAX_LOOKS = 2
+        const val MAX_LOOKS = 3
+        const val SETTLE_MS = 300L
         const val LAUNCH_CHECK_DELAY_MS = 5_000L
     }
 }
