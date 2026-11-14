@@ -55,7 +55,8 @@ API-ключі навмисно не вшиваються в APK: релізи �
 
 **Випуск версії:** збільш `versionCode` і `versionName` в `app/build.gradle.kts`, закоміть, потім
 ```powershell
-.elease.ps1 -Notes "що нового"
+.
+elease.ps1 -Notes "що нового"
 ```
 Скрипт збирає підписаний APK, генерує `update.json` і публікує реліз на GitHub. Застосунок читає
 `https://github.com/goropai/ai-assistant/releases/latest/download/update.json` (`speedy.updateManifestUrl`
@@ -73,6 +74,8 @@ API-ключі навмисно не вшиваються в APK: релізи �
 - Найбільший споживач зараз — постійна робота SpeechRecognizer (див. план).
 
 ## Протокол платформи (Wi-Fi)
+
+Прошивка для ESP32-DevKitC + драйвер L9110S (шасі 4WD) і схема підключення — у [`firmware/`](firmware/README.md).
 
 Мікроконтролер (наприклад, ESP32) у тій самій мережі приймає:
 ```
