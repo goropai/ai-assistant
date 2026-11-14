@@ -57,6 +57,17 @@ class Assistant(
         ears.release()
     }
 
+    /** Попередження про розряд: дочекатися паузи в розмові й попросити зарядку. */
+    fun announceLowBattery(level: Int) {
+        scope.launch {
+            while (busy) delay(500)
+            runBusy {
+                face.setMood(Mood.SAD)
+                say("Мій заряд $level ${BatteryAlerts.percentWord(level)}. Постав мене, будь ласка, на зарядку.")
+            }
+        }
+    }
+
     /** Тиха перевірка після запуску: говоримо лише тоді, коли знайшлася нова версія. */
     fun checkUpdatesOnLaunch() {
         if (!updater.isConfigured) return

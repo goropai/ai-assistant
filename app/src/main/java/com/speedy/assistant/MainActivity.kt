@@ -1,6 +1,11 @@
 package com.speedy.assistant
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
@@ -108,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         }
         // Тихо оновити адресу платформи: роутер міг видати їй нову IP.
         lifecycleScope.launch { robot.rediscover() }
+        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         if (!settings.hasActiveKey) {
             face.setMood(Mood.SAD)
             toast("Додай API-ключ у налаштуваннях")
@@ -132,7 +138,20 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    private val batteryAlerts = BatteryAlerts()
+
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+            if (level < 0 || scale <= 0) return
+            val charging = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+            batteryAlerts.update(level * 100 / scale, charging)?.let { assistant?.announceLowBattery(level * 100 / scale) }
+        }
+    }
+
     override fun onDestroy() {
+        if (assistant != null) unregisterReceiver(batteryReceiver)
         assistant?.release()
         speaker?.shutdown()
         super.onDestroy()

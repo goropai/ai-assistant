@@ -31,8 +31,8 @@ android {
         applicationId = "com.speedy.assistant"
         minSdk = 25 // Android 7.1
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
 
         buildConfigField("String", "CLAUDE_MODEL", quoted(prop("claude.model", "claude-opus-5-5")))
         buildConfigField("String", "CLAUDE_EFFORT", quoted(prop("claude.effort", "low")))
