@@ -10,8 +10,8 @@
 // Безпека: кожна команда руху має обмежену тривалість. Мотори зупиняє сама
 // плата, навіть якщо телефон завис або зник Wi-Fi.
 //
-// Драйвер: L9110S (2 канали на платі). Шасі 4WD: рекомендовано 2 плати — по каналу на мотор.
-// З однією платою підключи лише передні пари пінів, а мотори кожного боку — паралельно.
+// Драйвер: L9110S. Одна плата (за замовчуванням): лівий бік на каналі A, правий на B,
+// мотори кожного боку з'єднані паралельно. Дві плати — по каналу на кожен мотор (TWO_DRIVERS).
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -32,12 +32,15 @@ struct Motor {
   bool inverted;  // колесо крутиться не туди — постав true, дроти не чіпай
 };
 
-// Плата 1: лівий бік
-constexpr Motor FRONT_LEFT{25, 26, false};   // A-IA, A-IB
-constexpr Motor REAR_LEFT{27, 14, false};    // B-IA, B-IB
-// Плата 2: правий бік
-constexpr Motor FRONT_RIGHT{32, 33, false};  // A-IA, A-IB
-constexpr Motor REAR_RIGHT{18, 19, false};   // B-IA, B-IB
+// false — одна плата L9110S, мотори кожного боку паралельно; true — дві плати, по каналу на мотор.
+constexpr bool TWO_DRIVERS = false;
+
+// Плата 1 (єдина): канал A — лівий бік, канал B — правий бік
+constexpr Motor LEFT{25, 26, false};    // A-IA, A-IB
+constexpr Motor RIGHT{32, 33, false};   // B-IA, B-IB
+// Плата 2 (лише при TWO_DRIVERS): задні мотори; тоді плата 1 крутить лише передні
+constexpr Motor REAR_LEFT{27, 14, false};   // A-IA, A-IB
+constexpr Motor REAR_RIGHT{18, 19, false};  // B-IA, B-IB
 
 // TT-мотори розраховані на 3–6 В. При 2×18650 (до 8.4 В) обмежуємо ШІМ:
 // 6 В / 8.4 В ≈ 70%. Для 4×AA (6 В) можна поставити 100.
@@ -45,6 +48,11 @@ constexpr int MAX_DUTY_PERCENT = 70;
 
 constexpr uint32_t MAX_MOVE_MS = 3000;
 constexpr uint32_t DEFAULT_MOVE_MS = 500;
+
+// Плавний розгін: найбільший струм мотори тягнуть на старті, а з двома моторами на канал
+// L9110S (~0.8 А) легко перевантажити. 0 -> 100% приблизно за 150 мс.
+constexpr int RAMP_STEP = 7;
+constexpr uint32_t RAMP_INTERVAL_MS = 10;
 
 WebServer server(80);
 WiFiUDP discovery;
@@ -63,15 +71,44 @@ void driveMotor(const Motor& m, int speed) {
   analogWrite(m.ib, speed < 0 ? duty : 0);
 }
 
-void drive(int left, int right) {
-  driveMotor(FRONT_LEFT, left);
-  driveMotor(REAR_LEFT, left);
-  driveMotor(FRONT_RIGHT, right);
-  driveMotor(REAR_RIGHT, right);
+int targetLeft = 0, targetRight = 0;
+int currentLeft = 0, currentRight = 0;
+
+void applyOutputs() {
+  driveMotor(LEFT, currentLeft);
+  driveMotor(RIGHT, currentRight);
+  if (TWO_DRIVERS) {
+    driveMotor(REAR_LEFT, currentLeft);
+    driveMotor(REAR_RIGHT, currentRight);
+  }
 }
 
+// Задає цільову швидкість; до неї мотори доходять плавно в rampMotors().
+void drive(int left, int right) {
+  targetLeft = left;
+  targetRight = right;
+}
+
+int stepTowards(int current, int target) {
+  if (current < target) return min(current + RAMP_STEP, target);
+  if (current > target) return max(current - RAMP_STEP, target);
+  return current;
+}
+
+void rampMotors() {
+  static uint32_t last = 0;
+  if (millis() - last < RAMP_INTERVAL_MS) return;
+  last = millis();
+  if (currentLeft == targetLeft && currentRight == targetRight) return;
+  currentLeft = stepTowards(currentLeft, targetLeft);
+  currentRight = stepTowards(currentRight, targetRight);
+  applyOutputs();
+}
+
+// Зупинка — миттєва, без плавності: це команда безпеки.
 void stopMotors() {
-  drive(0, 0);
+  targetLeft = targetRight = currentLeft = currentRight = 0;
+  applyOutputs();
   moving = false;
 }
 
@@ -172,6 +209,7 @@ void setup() {
 void loop() {
   server.handleClient();
   handleDiscovery();
+  rampMotors();
 
   if (moving && (int32_t)(millis() - moveDeadline) >= 0) {
     stopMotors();
