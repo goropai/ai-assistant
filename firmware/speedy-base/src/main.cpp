@@ -5,6 +5,8 @@
 //   GET /stop
 //   GET /status  -> {"ok":true,...}
 //
+// Автопошук: UDP-порт 4210, на запит "SPEEDY_DISCOVER" плата відповідає "SPEEDY_ROBOT 80".
+//
 // Безпека: кожна команда руху має обмежену тривалість. Мотори зупиняє сама
 // плата, навіть якщо телефон завис або зник Wi-Fi.
 //
@@ -15,6 +17,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <WiFiUdp.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -44,6 +47,8 @@ constexpr uint32_t MAX_MOVE_MS = 3000;
 constexpr uint32_t DEFAULT_MOVE_MS = 500;
 
 WebServer server(80);
+WiFiUDP discovery;
+constexpr uint16_t DISCOVERY_PORT = 4210;
 uint32_t moveDeadline = 0;
 bool moving = false;
 String lastCommand = "none";
@@ -137,6 +142,19 @@ void connectWifi() {
   MDNS.begin("speedy-robot");
 }
 
+// Відповідь Спіді на пошук: так телефон дізнається IP плати без ручного введення.
+void handleDiscovery() {
+  int size = discovery.parsePacket();
+  if (size <= 0) return;
+  char buf[32] = {0};
+  discovery.read(buf, sizeof(buf) - 1);
+  if (strncmp(buf, "SPEEDY_DISCOVER", 15) != 0) return;
+  discovery.beginPacket(discovery.remoteIP(), discovery.remotePort());
+  discovery.print("SPEEDY_ROBOT 80");
+  discovery.endPacket();
+  Serial.printf("discovery from %s\n", discovery.remoteIP().toString().c_str());
+}
+
 void setup() {
   Serial.begin(115200);
   stopMotors();
@@ -148,10 +166,12 @@ void setup() {
   server.on("/status", handleStatus);
   server.onNotFound([] { sendJson(404, "{\"ok\":false,\"error\":\"not found\"}"); });
   server.begin();
+  discovery.begin(DISCOVERY_PORT);
 }
 
 void loop() {
   server.handleClient();
+  handleDiscovery();
 
   if (moving && (int32_t)(millis() - moveDeadline) >= 0) {
     stopMotors();

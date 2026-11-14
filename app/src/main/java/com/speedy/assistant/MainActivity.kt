@@ -10,13 +10,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.speedy.assistant.brain.Brain
 import com.speedy.assistant.brain.ConfiguredLlm
 import com.speedy.assistant.face.FaceView
 import com.speedy.assistant.face.Mood
-import com.speedy.assistant.robot.NoRobot
-import com.speedy.assistant.robot.RobotPlatform
-import com.speedy.assistant.robot.WifiRobotPlatform
+import com.speedy.assistant.robot.AutoRobotPlatform
+import com.speedy.assistant.robot.RobotDiscovery
 import com.speedy.assistant.settings.AppSettings
 import com.speedy.assistant.settings.SettingsDialog
 import com.speedy.assistant.update.UpdateManager
@@ -32,7 +32,20 @@ class MainActivity : AppCompatActivity() {
     private var speaker: Speaker? = null
     private var assistant: Assistant? = null
     private val settings by lazy { AppSettings(this) }
-    private var robot: RobotPlatform = NoRobot
+    private val robot by lazy {
+        // Короткі таймаути: якщо плата зникла, рух не має "висіти" 15 секунд.
+        val robotHttp = http.newBuilder()
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(3, TimeUnit.SECONDS)
+            .build()
+        AutoRobotPlatform(
+            http = robotHttp,
+            discovery = RobotDiscovery(),
+            manualUrl = { settings.robotUrl },
+            cachedUrl = { settings.robotFoundUrl },
+            saveFoundUrl = { settings.robotFoundUrl = it },
+        )
+    }
 
     private val http by lazy {
         OkHttpClient.Builder()
@@ -72,7 +85,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun initAssistant() {
         if (assistant != null) return
-        robot = createRobot()
         val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
         speaker = voice
 
@@ -82,7 +94,8 @@ class MainActivity : AppCompatActivity() {
             voice = voice,
             brain = Brain(ConfiguredLlm(http, settings)),
             camera = CameraSnapshot(this, this),
-            robot = { robot },
+            robot = robot,
+            findRobot = { robot.rediscover() },
             updater = UpdateManager(this, http, BuildConfig.UPDATE_MANIFEST_URL, BuildConfig.VERSION_CODE),
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }).also {
@@ -93,6 +106,8 @@ class MainActivity : AppCompatActivity() {
             it.start()
             it.checkUpdatesOnLaunch()
         }
+        // Тихо оновити адресу платформи: роутер міг видати їй нову IP.
+        lifecycleScope.launch { robot.rediscover() }
         if (!settings.hasActiveKey) {
             face.setMood(Mood.SAD)
             toast("Додай API-ключ у налаштуваннях")
@@ -102,13 +117,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun openSettings() {
         SettingsDialog.show(this, settings) {
-            robot = createRobot()
             face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
         }
     }
-
-    private fun createRobot(): RobotPlatform =
-        settings.robotUrl.takeIf { it.isNotBlank() }?.let { WifiRobotPlatform(http, it) } ?: NoRobot
 
     override fun onResume() {
         super.onResume()

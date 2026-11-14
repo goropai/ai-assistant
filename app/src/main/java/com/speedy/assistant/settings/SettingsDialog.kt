@@ -56,8 +56,8 @@ object SettingsDialog {
         val geminiKey = field(settings.geminiKey, "AIza…", secret = true)
         label("Модель Gemini")
         val geminiModel = field(settings.geminiModel, BuildConfig.GEMINI_MODEL)
-        label("Колісна платформа (Wi-Fi)")
-        val robotUrl = field(settings.robotUrl, "http://192.168.4.1")
+        label("Колісна платформа (порожньо = автопошук)")
+        val robotUrl = field(settings.robotUrl, settings.robotFoundUrl.ifBlank { "автопошук" })
 
         AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
             .setTitle("Спіді ${BuildConfig.VERSION_NAME}")

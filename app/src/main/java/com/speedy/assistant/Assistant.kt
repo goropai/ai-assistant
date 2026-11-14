@@ -19,6 +19,7 @@ import com.speedy.assistant.voice.WakeWord
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -32,7 +33,8 @@ class Assistant(
     private val voice: Speaker,
     private val brain: Brain,
     private val camera: CameraSnapshot,
-    private val robot: () -> RobotPlatform,
+    private val robot: RobotPlatform,
+    private val findRobot: suspend () -> String?,
     private val updater: UpdateManager,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
 ) {
@@ -121,11 +123,12 @@ class Assistant(
     private suspend fun handle(command: String) {
         when (LocalCommands.match(command)) {
             LocalCommand.STOP -> {
-                robot().stop()
+                robot.stop()
                 face.setMood(Mood.NEUTRAL)
                 say("Зупиняюсь.")
                 return
             }
+            LocalCommand.FIND_ROBOT -> return findPlatform()
             LocalCommand.CHECK_UPDATE -> return checkUpdates(install = false)
             LocalCommand.INSTALL_UPDATE -> return checkUpdates(install = true)
             null -> {}
@@ -155,15 +158,30 @@ class Assistant(
             "move" -> {
                 val direction = Direction.parse(reply.action.direction)
                 // Рух паралельно з мовленням.
-                val moving = direction?.let { scope.launch { robot().move(it, reply.action.durationMs) } }
+                val moving = direction?.let { scope.async { robot.move(it, reply.action.durationMs) } }
                 speak(reply)
-                moving?.join()
+                if (moving != null && !moving.await()) {
+                    face.setMood(Mood.SAD)
+                    say("Ой, я не бачу своїх коліс. Скажи «Спіді, знайди платформу».")
+                }
             }
             "stop" -> {
-                robot().stop()
+                robot.stop()
                 speak(reply)
             }
             else -> speak(reply)
+        }
+    }
+
+    private suspend fun findPlatform() {
+        face.setMood(Mood.THINKING)
+        val url = findRobot()
+        if (url == null) {
+            face.setMood(Mood.SAD)
+            say("Не знайшла платформу. Перевір, що вона увімкнена і в тій самій Wi-Fi мережі.")
+        } else {
+            face.setMood(Mood.HAPPY)
+            say("Знайшла платформу за адресою ${url.removePrefix("http://")}.")
         }
     }
 

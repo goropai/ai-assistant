@@ -30,6 +30,13 @@ class CommandsTest {
     }
 
     @Test
+    fun findRobotCommands() {
+        listOf("знайди платформу", "Знайди робота!", "пошукай колеса", "підключись до платформи").forEach {
+            assertEquals(it, LocalCommand.FIND_ROBOT, LocalCommands.match(it))
+        }
+    }
+
+    @Test
     fun otherCommands() {
         assertEquals(LocalCommand.STOP, LocalCommands.match("Стоп!"))
         listOf("розкажи жарт", "оновлення погоди на завтра", "онови мені пам'ять про погоду").forEach {
