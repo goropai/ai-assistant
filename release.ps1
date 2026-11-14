@@ -1,4 +1,4 @@
-# Випуск нової версії Спіді на GitHub Releases.
+﻿# Випуск нової версії Спіді на GitHub Releases.
 #   .\release.ps1 -Notes "що нового"
 # Потрібен gh: `gh auth login` або змінна GH_TOKEN.
 # Перед запуском збільш versionCode і versionName в app/build.gradle.kts і закоміть зміни.
