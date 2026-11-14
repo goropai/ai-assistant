@@ -5,10 +5,13 @@ import android.util.Log
 import com.speedy.assistant.brain.AgentReply
 import com.speedy.assistant.brain.Brain
 import com.speedy.assistant.brain.LlmException
+import com.speedy.assistant.brain.MissingKeyException
 import com.speedy.assistant.face.FaceView
 import com.speedy.assistant.face.Mood
 import com.speedy.assistant.robot.Direction
 import com.speedy.assistant.robot.RobotPlatform
+import com.speedy.assistant.update.UpdateInfo
+import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
 import com.speedy.assistant.voice.Speaker
 import com.speedy.assistant.voice.VoiceListener
@@ -29,7 +32,8 @@ class Assistant(
     private val voice: Speaker,
     private val brain: Brain,
     private val camera: CameraSnapshot,
-    private val robot: RobotPlatform,
+    private val robot: () -> RobotPlatform,
+    private val updater: UpdateManager,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
 ) {
     private val ears = earsFactory(::onHeard)
@@ -49,6 +53,24 @@ class Assistant(
 
     fun release() {
         ears.release()
+    }
+
+    /** Тиха перевірка після запуску: говоримо лише тоді, коли знайшлася нова версія. */
+    fun checkUpdatesOnLaunch() {
+        if (!updater.isConfigured) return
+        scope.launch {
+            delay(LAUNCH_CHECK_DELAY_MS)
+            val info = try {
+                updater.check()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "launch update check failed: ${e.message}")
+                null
+            } ?: return@launch
+            while (busy) delay(1000)
+            runBusy { announceUpdate(info) }
+        }
     }
 
     /** Дотик до екрана = звертання "Спіді" (зручно для тестів у шумі). */
@@ -78,7 +100,8 @@ class Assistant(
             } catch (e: Exception) {
                 Log.e(TAG, "command failed", e)
                 face.setMood(Mood.SAD)
-                say(if (e is LlmException || e is java.io.IOException) "Ой, не можу зв'язатися зі своїм мозком. Перевір інтернет." else "Ой, щось пішло не так.")
+                if (e is MissingKeyException) say("Мені потрібен ключ API. Довго натисни на екран, щоб відкрити налаштування.")
+                else say(if (e is LlmException || e is java.io.IOException) "Ой, не можу зв'язатися зі своїм мозком. Перевір інтернет." else "Ой, щось пішло не так.")
             } finally {
                 face.setSpeaking(false)
                 busy = false
@@ -96,11 +119,16 @@ class Assistant(
     }
 
     private suspend fun handle(command: String) {
-        if (isStopCommand(command)) {
-            robot.stop()
-            face.setMood(Mood.NEUTRAL)
-            say("Зупиняюсь.")
-            return
+        when (LocalCommands.match(command)) {
+            LocalCommand.STOP -> {
+                robot().stop()
+                face.setMood(Mood.NEUTRAL)
+                say("Зупиняюсь.")
+                return
+            }
+            LocalCommand.CHECK_UPDATE -> return checkUpdates(install = false)
+            LocalCommand.INSTALL_UPDATE -> return checkUpdates(install = true)
+            null -> {}
         }
 
         face.setMood(Mood.THINKING)
@@ -127,16 +155,66 @@ class Assistant(
             "move" -> {
                 val direction = Direction.parse(reply.action.direction)
                 // Рух паралельно з мовленням.
-                val moving = direction?.let { scope.launch { robot.move(it, reply.action.durationMs) } }
+                val moving = direction?.let { scope.launch { robot().move(it, reply.action.durationMs) } }
                 speak(reply)
                 moving?.join()
             }
             "stop" -> {
-                robot.stop()
+                robot().stop()
                 speak(reply)
             }
             else -> speak(reply)
         }
+    }
+
+    private suspend fun checkUpdates(install: Boolean) {
+        try {
+            runUpdate(install)
+        } catch (e: java.io.IOException) {
+            Log.e(TAG, "update failed", e)
+            face.setMood(Mood.SAD)
+            // Текст помилки часто англійською — у лог, а вголос лише суть.
+            say("Не вдалося ${if (install) "оновитися" else "перевірити оновлення"}. Перевір інтернет і сервер оновлень.")
+        }
+    }
+
+    private suspend fun runUpdate(install: Boolean) {
+        if (!updater.isConfigured) {
+            face.setMood(Mood.SAD)
+            say("Сервер оновлень не налаштований. Версія ${BuildConfig.VERSION_NAME}.")
+            return
+        }
+        face.setMood(Mood.THINKING)
+        val info = updater.check()
+        if (info == null) {
+            face.setMood(Mood.HAPPY)
+            say("У мене найновіша версія, ${BuildConfig.VERSION_NAME}.")
+            return
+        }
+        if (!install) {
+            announceUpdate(info)
+            return
+        }
+
+        face.setMood(Mood.HAPPY)
+        say("Завантажую версію ${info.versionName}.")
+        face.setMood(Mood.THINKING)
+        val apk = updater.download(info)
+        if (!updater.canInstall()) {
+            face.setMood(Mood.SAD)
+            say("Дозволь встановлення з невідомих джерел, а потім скажи «Спіді, оновись» ще раз.")
+            updater.openInstallPermissionSettings()
+            return
+        }
+        face.setMood(Mood.HAPPY)
+        say("Готово! Підтверди встановлення на екрані.")
+        updater.install(apk)
+    }
+
+    private suspend fun announceUpdate(info: UpdateInfo) {
+        face.setMood(Mood.SURPRISED)
+        val notes = info.notes.takeIf { it.isNotBlank() }?.let { " Що нового: $it." }.orEmpty()
+        say("Є нова версія ${info.versionName}!$notes Скажи «Спіді, оновись», і я встановлю її.")
     }
 
     private suspend fun speak(reply: AgentReply) {
@@ -164,13 +242,11 @@ class Assistant(
         }
     }
 
-    private fun isStopCommand(command: String): Boolean =
-        command.lowercase().trim(' ', '.', '!', ',') in setOf("стоп", "стій", "зупинись", "зупинися", "stop")
-
     private companion object {
         const val TAG = "Assistant"
         const val FOLLOW_UP_WINDOW_MS = 8_000L
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 2
+        const val LAUNCH_CHECK_DELAY_MS = 5_000L
     }
 }

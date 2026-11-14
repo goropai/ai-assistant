@@ -11,14 +11,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.speedy.assistant.brain.Brain
-import com.speedy.assistant.brain.ClaudeClient
-import com.speedy.assistant.brain.GeminiClient
-import com.speedy.assistant.brain.LlmClient
+import com.speedy.assistant.brain.ConfiguredLlm
 import com.speedy.assistant.face.FaceView
 import com.speedy.assistant.face.Mood
 import com.speedy.assistant.robot.NoRobot
 import com.speedy.assistant.robot.RobotPlatform
 import com.speedy.assistant.robot.WifiRobotPlatform
+import com.speedy.assistant.settings.AppSettings
+import com.speedy.assistant.settings.SettingsDialog
+import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
 import com.speedy.assistant.voice.Speaker
 import com.speedy.assistant.voice.VoiceListener
@@ -30,6 +31,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var face: FaceView
     private var speaker: Speaker? = null
     private var assistant: Assistant? = null
+    private val settings by lazy { AppSettings(this) }
+    private var robot: RobotPlatform = NoRobot
 
     private val http by lazy {
         OkHttpClient.Builder()
@@ -56,6 +59,7 @@ class MainActivity : AppCompatActivity() {
 
         face = FaceView(this)
         face.setOnClickListener { assistant?.manualWake() }
+        face.setOnLongClickListener { openSettings(); true }
         setContentView(face)
 
         val needed = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
@@ -68,11 +72,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun initAssistant() {
         if (assistant != null) return
-        val llm = createLlm() ?: run {
-            face.setMood(Mood.SAD)
-            toast("Не задано API-ключ у local.properties")
-            return
-        }
+        robot = createRobot()
         val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
         speaker = voice
 
@@ -80,26 +80,35 @@ class MainActivity : AppCompatActivity() {
             scope = lifecycleScope,
             face = face,
             voice = voice,
-            brain = Brain(llm),
+            brain = Brain(ConfiguredLlm(http, settings)),
             camera = CameraSnapshot(this, this),
-            robot = createRobot(),
+            robot = { robot },
+            updater = UpdateManager(this, http, BuildConfig.UPDATE_MANIFEST_URL, BuildConfig.VERSION_CODE),
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
                 }
             },
-        ).also { it.start() }
+        ).also {
+            it.start()
+            it.checkUpdatesOnLaunch()
+        }
+        if (!settings.hasActiveKey) {
+            face.setMood(Mood.SAD)
+            toast("Додай API-ключ у налаштуваннях")
+            openSettings()
+        }
     }
 
-    private fun createLlm(): LlmClient? = when (BuildConfig.LLM_PROVIDER.lowercase()) {
-        "gemini" -> BuildConfig.GEMINI_API_KEY.takeIf { it.isNotBlank() }
-            ?.let { GeminiClient(http, it, BuildConfig.GEMINI_MODEL) }
-        else -> BuildConfig.ANTHROPIC_API_KEY.takeIf { it.isNotBlank() }
-            ?.let { ClaudeClient(http, it, BuildConfig.CLAUDE_MODEL, BuildConfig.CLAUDE_EFFORT) }
+    private fun openSettings() {
+        SettingsDialog.show(this, settings) {
+            robot = createRobot()
+            face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
+        }
     }
 
     private fun createRobot(): RobotPlatform =
-        BuildConfig.ROBOT_WIFI_URL.takeIf { it.isNotBlank() }?.let { WifiRobotPlatform(http, it) } ?: NoRobot
+        settings.robotUrl.takeIf { it.isNotBlank() }?.let { WifiRobotPlatform(http, it) } ?: NoRobot
 
     override fun onResume() {
         super.onResume()

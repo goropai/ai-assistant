@@ -33,16 +33,36 @@ Android-застосунок (цільова ОС **Android 7.1**, API 25): на
 
 ## Налаштування
 
-1. Скопіюй `local.properties.example` у `local.properties` і впиши API-ключ
-   (`anthropic.apiKey` або `gemini.apiKey` + `llm.provider=gemini`).
-2. Збери: `gradlew assembleDebug` (або відкрий проєкт в Android Studio / IntelliJ IDEA).
+1. Скопіюй `local.properties.example` у `local.properties` (моделі, голос, яскравість, ключ підпису).
+2. Збери: `gradlew assembleDebug` (або ▶ в Android Studio / IntelliJ IDEA).
 3. Встанови на телефон: `adb install -r app/build/outputs/apk/debug/app-debug.apk`.
+4. На телефоні **довго натисни на обличчя** → встав API-ключ Claude або Gemini, за потреби адресу платформи.
+
+API-ключі навмисно не вшиваються в APK: релізи публічні. Ключ зберігається лише на телефоні.
 
 На телефоні потрібні: застосунок Google (розпізнавання мовлення), українські голосові дані
 в «Налаштування → Мова та введення → Синтез мовлення», інтернет через Wi-Fi.
 
-Ключ API зберігається у `BuildConfig` — для особистого прототипу це прийнятно, але APK із ключем
-нікому не передавай.
+## Оновлення
+
+Спіді перевіряє нову версію через 5 с після запуску і повідомляє, якщо вона є. Голосом:
+- «Спіді, перевір оновлення» / «чи є оновлення» / «яка в тебе версія»
+- «Спіді, оновись» / «онови застосунок» / «встанови оновлення» — завантажує APK, перевіряє
+  SHA-256 і відкриває системний інсталятор (Android завжди просить підтвердити).
+
+На Android 7.1 треба один раз увімкнути «Налаштування → Безпека → Невідомі джерела».
+
+**Випуск версії:** збільш `versionCode` і `versionName` в `app/build.gradle.kts`, закоміть, потім
+```powershell
+.elease.ps1 -Notes "що нового"
+```
+Скрипт збирає підписаний APK, генерує `update.json` і публікує реліз на GitHub. Застосунок читає
+`https://github.com/<owner>/speedy/releases/latest/download/update.json` (`speedy.updateManifestUrl`
+у `gradle.properties`).
+
+Ключ підпису (`signing.properties` у `local.properties`) підписує і debug, і release, тож оновлення
+ставляться поверх версії з IDE. **Збережи його резервну копію** — без нього встановлений
+застосунок не оновити.
 
 ## Батарея
 

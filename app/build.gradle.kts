@@ -1,3 +1,4 @@
+import java.security.MessageDigest
 import java.util.Properties
 
 plugins {
@@ -13,6 +14,13 @@ val localProps = Properties().apply {
 fun prop(name: String, default: String = ""): String =
     localProps.getProperty(name)?.trim().takeUnless { it.isNullOrEmpty() } ?: default
 
+// Ключ підпису: шлях до .properties (storeFile, storePassword, keyAlias, keyPassword) поза репозиторієм.
+val signingProps = Properties().apply {
+    val path = prop("signing.properties")
+    val f = file(path)
+    if (path.isNotEmpty() && f.exists()) f.inputStream().use { load(it) }
+}
+
 fun quoted(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
@@ -26,20 +34,37 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        buildConfigField("String", "LLM_PROVIDER", quoted(prop("llm.provider", "claude")))
-        buildConfigField("String", "ANTHROPIC_API_KEY", quoted(prop("anthropic.apiKey")))
         buildConfigField("String", "CLAUDE_MODEL", quoted(prop("claude.model", "claude-opus-5-5")))
         buildConfigField("String", "CLAUDE_EFFORT", quoted(prop("claude.effort", "low")))
-        buildConfigField("String", "GEMINI_API_KEY", quoted(prop("gemini.apiKey")))
         buildConfigField("String", "GEMINI_MODEL", quoted(prop("gemini.model", "gemini-2.5-flash")))
         buildConfigField("float", "TTS_PITCH", prop("tts.pitch", "1.3") + "f")
         buildConfigField("float", "TTS_RATE", prop("tts.rate", "1.05") + "f")
         buildConfigField("String", "TTS_VOICE", quoted(prop("tts.voice")))
         buildConfigField("float", "SCREEN_BRIGHTNESS", prop("screen.brightness", "0.15") + "f")
-        buildConfigField("String", "ROBOT_WIFI_URL", quoted(prop("robot.wifiUrl")))
+        // API-ключі сюди НЕ додавати: APK публікується відкрито. Вони вводяться на телефоні.
+        buildConfigField(
+            "String", "UPDATE_MANIFEST_URL",
+            quoted(prop("update.manifestUrl", (findProperty("speedy.updateManifestUrl") as String?).orEmpty())),
+        )
+    }
+
+    signingConfigs {
+        if (signingProps.isNotEmpty()) {
+            create("speedy") {
+                storeFile = file(signingProps.getProperty("storeFile"))
+                storePassword = signingProps.getProperty("storePassword")
+                keyAlias = signingProps.getProperty("keyAlias")
+                keyPassword = signingProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
+        // Debug і release підписані одним ключем, щоб оновлення з GitHub ставилися поверх версії з IDE.
+        signingConfigs.findByName("speedy")?.let { speedy ->
+            getByName("debug").signingConfig = speedy
+            getByName("release").signingConfig = speedy
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
@@ -71,4 +96,35 @@ dependencies {
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
+
+    testImplementation("junit:junit:4.13.2")
+}
+
+/**
+ * Готує реліз для самооновлення: app/build/outputs/update/{speedy-<версія>.apk, update.json}.
+ * Обидва файли викласти поруч за адресою update.manifestUrl. Перед релізом збільш versionCode.
+ *   gradlew updateManifest -Pnotes="що нового"
+ */
+tasks.register("updateManifest") {
+    dependsOn("assembleRelease")
+    val versionCode = android.defaultConfig.versionCode ?: 1
+    val versionName = android.defaultConfig.versionName ?: versionCode.toString()
+    val notes = (project.findProperty("notes") as String?).orEmpty()
+    val apkIn = layout.buildDirectory.file("outputs/apk/release/app-release.apk")
+    val outDir = layout.buildDirectory.dir("outputs/update")
+    val signed = signingProps.isNotEmpty()
+    doLast {
+        check(signed) { "Реліз не підписано: задай signing.properties у local.properties" }
+        val dir = outDir.get().asFile.apply { deleteRecursively(); mkdirs() }
+        val apkName = "speedy-$versionName.apk"
+        val apk = apkIn.get().asFile.copyTo(dir.resolve(apkName), overwrite = true)
+        val sha = MessageDigest.getInstance("SHA-256").digest(apk.readBytes())
+            .joinToString("") { "%02x".format(it) }
+        fun esc(v: String) = v.replace("\\", "\\\\").replace("\"", "\\\"")
+        dir.resolve("update.json").writeText(
+            """{"versionCode": $versionCode, "versionName": "${esc(versionName)}", """ +
+                """"apkUrl": "$apkName", "sha256": "$sha", "notes": "${esc(notes)}"}""" + "\n"
+        )
+        println("Оновлення готове: ${dir.absolutePath}")
+    }
 }

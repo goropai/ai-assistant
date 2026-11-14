@@ -11,7 +11,7 @@ sealed interface Part {
 
 data class Turn(val role: Role, val parts: List<Part>)
 
-class LlmException(message: String, cause: Throwable? = null) : IOException(message, cause)
+open class LlmException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /** Зовнішня потужна модель, що відповідає JSON-рядком формату [AgentReply]. */
 interface LlmClient {
