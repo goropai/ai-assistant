@@ -31,8 +31,8 @@ android {
         applicationId = "com.speedy.assistant"
         minSdk = 25 // Android 7.1
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.5.1"
 
         // Нативні бібліотеки TensorFlow Lite лише для ARM — менший APK.
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
@@ -110,8 +110,9 @@ dependencies {
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
 
-    // Локальне розпізнавання присутності (EfficientDet-Lite0 у assets)
-    implementation("org.tensorflow:tensorflow-lite-task-vision:0.4.4")
+    // Локальне розпізнавання присутності (EfficientDet-Lite0 у assets).
+    // Лише Interpreter: нативна бібліотека Task Library не завантажується на Android 7.1.
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
 
     testImplementation("junit:junit:4.13.2")
     // Справжній org.json для JVM-тестів (в android.jar лише заглушки).

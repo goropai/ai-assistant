@@ -31,6 +31,8 @@ class CameraSnapshot(
         val provider = awaitProvider()
         val capture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            // У темряві камера сама вмикає спалах (якщо він є в цієї камери), при світлі — ні.
+            .setFlashMode(ImageCapture.FLASH_MODE_AUTO)
             .build()
         val selector = if (front) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
 

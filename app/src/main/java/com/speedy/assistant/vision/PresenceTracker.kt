@@ -1,12 +1,13 @@
 package com.speedy.assistant.vision
 
-enum class Kind(val label: String, val ua: String) {
-    PERSON("person", "людина"),
-    CAT("cat", "кіт"),
-    DOG("dog", "собака");
+/** [cocoClass] — номер рядка в labelmap.txt моделі (з 0). */
+enum class Kind(val cocoClass: Int, val ua: String) {
+    PERSON(0, "людина"),
+    CAT(16, "кіт"),
+    DOG(17, "собака");
 
     companion object {
-        fun fromLabel(label: String): Kind? = entries.firstOrNull { it.label == label }
+        fun fromCoco(cocoClass: Int): Kind? = entries.firstOrNull { it.cocoClass == cocoClass }
     }
 }
 

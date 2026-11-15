@@ -16,9 +16,6 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
-import org.tensorflow.lite.support.image.TensorImage
-import org.tensorflow.lite.task.core.BaseOptions
-import org.tensorflow.lite.task.vision.detector.ObjectDetector
 import java.util.concurrent.Executors
 
 /**
@@ -38,7 +35,7 @@ class PresenceWatcher(
     private val tracker = PresenceTracker()
     private var provider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
-    private var detector: ObjectDetector? = null
+    private var detector: CocoDetector? = null
     private var lastRun = 0L
     /** Прив'язка камери асинхронна: між start() і готовністю провайдера могли викликати stop(). */
     private var wanted = false
@@ -101,16 +98,14 @@ class PresenceWatcher(
             val model = detector() ?: return
             val frame = upright(it.toBitmap(), it.imageInfo.rotationDegrees)
 
-            val sightings = model.detect(TensorImage.fromBitmap(frame)).mapNotNull { d ->
-                val best = d.categories.maxByOrNull { c -> c.score } ?: return@mapNotNull null
-                val kind = Kind.fromLabel(best.label) ?: return@mapNotNull null
-                val box = d.boundingBox
+            val sightings = model.detect(frame, SCORE_THRESHOLD).take(MAX_RESULTS).mapNotNull { d ->
+                val kind = Kind.fromCoco(d.cocoClass) ?: return@mapNotNull null
                 Sighting(
                     kind = kind,
-                    score = best.score,
-                    cx = box.centerX() / frame.width,
-                    cy = box.centerY() / frame.height,
-                    area = box.width() * box.height() / (frame.width * frame.height),
+                    score = d.score,
+                    cx = (d.left + d.right) / 2,
+                    cy = (d.top + d.bottom) / 2,
+                    area = (d.right - d.left) * (d.bottom - d.top),
                 )
             }
             val events = tracker.update(now, sightings)
@@ -119,15 +114,10 @@ class PresenceWatcher(
         }
     }
 
-    private fun detector(): ObjectDetector? {
+    private fun detector(): CocoDetector? {
         detector?.let { return it }
         return try {
-            val options = ObjectDetector.ObjectDetectorOptions.builder()
-                .setBaseOptions(BaseOptions.builder().setNumThreads(2).build())
-                .setMaxResults(5)
-                .setScoreThreshold(SCORE_THRESHOLD)
-                .build()
-            ObjectDetector.createFromFileAndOptions(context, MODEL, options).also { detector = it }
+            CocoDetector(context, MODEL, threads = 2).also { detector = it }
         } catch (e: Throwable) {
             // Напр. немає нативної бібліотеки для цього процесора — вимикаємось, а не падаємо.
             Log.e(TAG, "detector init failed, presence disabled", e)
@@ -148,5 +138,6 @@ class PresenceWatcher(
         const val MODEL = "efficientdet_lite0.tflite"
         const val INTERVAL_MS = 1500L
         const val SCORE_THRESHOLD = 0.5f
+        const val MAX_RESULTS = 5
     }
 }
