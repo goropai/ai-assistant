@@ -37,6 +37,17 @@ class CommandsTest {
     }
 
     @Test
+    fun timeAndBattery() {
+        listOf("котра година", "Котра зараз година?", "скільки часу", "який зараз час").forEach {
+            assertEquals(it, LocalCommand.TIME, LocalCommands.match(it))
+        }
+        listOf("скільки в тебе заряду", "який у тебе заряд", "як батарея?").forEach {
+            assertEquals(it, LocalCommand.BATTERY, LocalCommands.match(it))
+        }
+        assertEquals(null, LocalCommands.match("розкажи, як працює батарея в електромобілі і чому вона сідає"))
+    }
+
+    @Test
     fun otherCommands() {
         assertEquals(LocalCommand.STOP, LocalCommands.match("Стоп!"))
         listOf("розкажи жарт", "оновлення погоди на завтра", "онови мені пам'ять про погоду").forEach {

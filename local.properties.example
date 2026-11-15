@@ -2,7 +2,7 @@
 # вони вводяться на телефоні: довге натискання на обличчя -> налаштування.
 
 # Моделі за замовчуванням (на телефоні можна змінити)
-claude.model=claude-opus-5-5
+claude.model=claude-sonnet-5-5
 # low = найшвидша відповідь для голосу; medium/high — розумніше, але повільніше
 claude.effort=low
 gemini.model=gemini-2.5-flash

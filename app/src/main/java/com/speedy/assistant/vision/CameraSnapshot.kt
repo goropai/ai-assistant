@@ -27,7 +27,8 @@ class CameraSnapshot(
     private val context: Context,
     private val owner: LifecycleOwner,
 ) {
-    suspend fun take(front: Boolean, maxSide: Int = 1024): ByteArray = withContext(Dispatchers.Main) {
+    /** 768 px по довшій стороні — ~560 токенів зображення; деталей для розмови досить. */
+    suspend fun take(front: Boolean, maxSide: Int = 768): ByteArray = withContext(Dispatchers.Main) {
         val provider = awaitProvider()
         val capture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)

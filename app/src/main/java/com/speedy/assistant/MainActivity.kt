@@ -70,7 +70,7 @@ class MainActivity : AppCompatActivity() {
     private val http by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(90, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS) // довше мовчати голосовій помічниці не можна
             .build()
     }
 
@@ -119,6 +119,7 @@ class MainActivity : AppCompatActivity() {
             findRobot = { robot.rediscover() },
             updater = UpdateManager(this, http, BuildConfig.UPDATE_MANIFEST_URL, BuildConfig.VERSION_CODE),
             chirps = ChirpPlayer(),
+            battery = { batteryPercent to charging },
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")

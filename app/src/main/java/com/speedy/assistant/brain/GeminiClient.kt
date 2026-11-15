@@ -1,6 +1,7 @@
 package com.speedy.assistant.brain
 
 import android.util.Base64
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -21,7 +22,12 @@ class GeminiClient(
         val body = JSONObject()
             .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
             .put("contents", JSONArray().apply { history.forEach { put(toJson(it)) } })
-            .put("generationConfig", JSONObject().put("responseMimeType", "application/json"))
+            .put(
+                "generationConfig", JSONObject()
+                    .put("responseMimeType", "application/json")
+                    // Без "роздумів": відповіді короткі, а роздуми оплачуються як вихідні токени.
+                    .put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+            )
 
         val request = Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
@@ -33,7 +39,14 @@ class GeminiClient(
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw LlmException("Gemini HTTP ${response.code}: ${text.take(300)}")
 
-            val parts = JSONObject(text)
+            val json = JSONObject(text)
+            json.optJSONObject("usageMetadata")?.let { u ->
+                Log.d(
+                    "GeminiClient", "tokens: in=${u.optInt("promptTokenCount")} cached=${u.optInt("cachedContentTokenCount")} " +
+                        "out=${u.optInt("candidatesTokenCount")} thoughts=${u.optInt("thoughtsTokenCount")}"
+                )
+            }
+            val parts = json
                 .optJSONArray("candidates")?.optJSONObject(0)
                 ?.optJSONObject("content")?.optJSONArray("parts")
                 ?: throw LlmException("Gemini: порожня відповідь")

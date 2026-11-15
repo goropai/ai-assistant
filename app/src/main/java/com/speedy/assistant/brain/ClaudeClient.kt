@@ -1,6 +1,7 @@
 package com.speedy.assistant.brain
 
 import android.util.Base64
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -13,6 +14,12 @@ import org.json.JSONObject
 /**
  * Claude Messages API напряму через HTTP: офіційний Java SDK не орієнтований на
  * Android 7.1, а OkHttp уже використовується і для Gemini, і для платформи.
+ *
+ * Економія токенів:
+ * - системний промпт кешується (cache_control), а верхньорівневий cache_control кешує
+ *   ще й історію — кожен наступний запит розмови платить за неї ~0.1 ціни;
+ * - без "роздумів" (thinking between_tools) — відповіді короткі, JSON за схемою;
+ * - історія лише дописується ([Brain]), інакше кеш скидається.
  */
 class ClaudeClient(
     private val http: OkHttpClient,
@@ -24,8 +31,19 @@ class ClaudeClient(
     override suspend fun complete(system: String, history: List<Turn>): String = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("model", model)
-            .put("max_tokens", 16000)
-            .put("system", system)
+            .put("max_tokens", MAX_TOKENS)
+            .put(
+                "system", JSONArray().put(
+                    JSONObject().put("type", "text").put("text", system)
+                        .put("cache_control", JSONObject().put("type", "ephemeral"))
+                )
+            )
+            // Кеш і для історії розмови: точка кешу ставиться на останній блок.
+            .put("cache_control", JSONObject().put("type", "ephemeral"))
+            .apply {
+                // between_tools — найнижчий рівень роздумів; дозволений лише до effort "high".
+                if (effort in NO_THINKING_EFFORTS) put("thinking", JSONObject().put("type", "between_tools"))
+            }
             .put(
                 "output_config", JSONObject()
                     .put("effort", effort)
@@ -49,6 +67,12 @@ class ClaudeClient(
 
             val json = JSONObject(text)
             if (json.optString("stop_reason") == "refusal") throw LlmException("Claude refusal")
+            json.optJSONObject("usage")?.let { u ->
+                Log.d(
+                    TAG, "tokens: in=${u.optInt("input_tokens")} cache_read=${u.optInt("cache_read_input_tokens")} " +
+                        "cache_write=${u.optInt("cache_creation_input_tokens")} out=${u.optInt("output_tokens")}"
+                )
+            }
 
             // Відповідь може містити блоки thinking — беремо тільки текст.
             val content = json.optJSONArray("content") ?: JSONArray()
@@ -82,6 +106,10 @@ class ClaudeClient(
     }
 
     private companion object {
+        const val TAG = "ClaudeClient"
+        /** Відповідь — короткий JSON; запас на випадок довшої репліки. */
+        const val MAX_TOKENS = 2048
+        val NO_THINKING_EFFORTS = setOf("low", "medium", "high")
         val JSON = "application/json".toMediaType()
     }
 }

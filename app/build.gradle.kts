@@ -37,7 +37,7 @@ android {
         // Нативні бібліотеки TensorFlow Lite лише для ARM — менший APK.
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
 
-        buildConfigField("String", "CLAUDE_MODEL", quoted(prop("claude.model", "claude-opus-5-5")))
+        buildConfigField("String", "CLAUDE_MODEL", quoted(prop("claude.model", "claude-sonnet-5-5")))
         buildConfigField("String", "CLAUDE_EFFORT", quoted(prop("claude.effort", "low")))
         buildConfigField("String", "GEMINI_MODEL", quoted(prop("gemini.model", "gemini-2.5-flash")))
         buildConfigField("float", "TTS_PITCH", prop("tts.pitch", "1.3") + "f")

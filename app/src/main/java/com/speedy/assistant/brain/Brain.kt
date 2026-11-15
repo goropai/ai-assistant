@@ -1,20 +1,34 @@
 package com.speedy.assistant.brain
 
+import android.os.SystemClock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Тримає коротку історію розмови і перетворює команди на [AgentReply]. */
+/**
+ * Тримає коротку історію розмови і перетворює команди на [AgentReply].
+ *
+ * Історія лише дописується — так кеш промпта на боці API працює на всю розмову
+ * (будь-яка правка старих повідомлень скидає кеш). Замість "стискання" — нова розмова:
+ * після паузи [conversationGapMs] або коли історія задовга (тоді відкидаємо старішу
+ * половину за раз — один промах кешу замість промаху на кожному запиті).
+ * Фото зменшуються ще до відправки ([com.speedy.assistant.vision.CameraSnapshot]).
+ */
 class Brain(
     private val llm: LlmClient,
     private val maxTurns: Int = 16,
+    private val conversationGapMs: Long = 3 * 60_000,
+    private val now: () -> Long = { SystemClock.elapsedRealtime() },
     /** Що Спіді зараз бачить поруч (локальна модель) — додається до кожного запиту. */
     private val presence: () -> String = { "" },
 ) {
     private val history = ArrayList<Turn>()
+    private var lastAsk = Long.MIN_VALUE / 2
     private val clock = SimpleDateFormat("HH:mm, EEEE d MMMM", Locale("uk", "UA"))
 
     suspend fun ask(text: String, image: ByteArray? = null): AgentReply {
+        if (now() - lastAsk > conversationGapMs) history.clear()
+        lastAsk = now()
         val parts = buildList {
             image?.let { add(Part.Image(it)) }
             val nearby = presence().takeIf { it.isNotBlank() }?.let { " [поруч: $it]" }.orEmpty()
@@ -28,26 +42,21 @@ class Brain(
             throw e
         }
         history += Turn(Role.ASSISTANT, listOf(Part.Text(raw)))
-        compact()
+        trim()
         return AgentReply.parse(raw)
     }
 
     fun reset() = history.clear()
 
-    /** Старі фото замінюємо текстом (економія трафіку й токенів), історію обрізаємо парами. */
-    private fun compact() {
-        val lastUser = history.indexOfLast { it.role == Role.USER }
-        for (i in history.indices) {
-            val turn = history[i]
-            if (i != lastUser && turn.parts.any { it is Part.Image }) {
-                history[i] = turn.copy(parts = turn.parts.map { if (it is Part.Image) Part.Text("[кадр з камери]") else it })
-            }
-        }
-        while (history.size > maxTurns) {
-            history.removeAt(0)
-            history.removeAt(0)
-        }
+    /** Задовга розмова: лишаємо новішу половину (парами "користувач — Спіді"). */
+    private fun trim() {
+        if (history.size <= maxTurns) return
+        val keep = (maxTurns / 2) and 1.inv()
+        repeat(history.size - keep) { history.removeAt(0) }
     }
+
+    /** Для тестів. */
+    internal val size get() = history.size
 
     companion object {
         const val MAX_NAV_STEPS = 8

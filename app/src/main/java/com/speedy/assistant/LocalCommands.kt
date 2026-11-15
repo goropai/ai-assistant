@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
-/** Команди, які виконуються одразу, без звернення до LLM. */
-enum class LocalCommand { STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE }
+/** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
+enum class LocalCommand { STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY }
 
 object LocalCommands {
 
@@ -25,6 +25,12 @@ object LocalCommands {
         "^(знайди|шукай|пошукай|підключи(сь|ся)?(\\s+до)?|з'єднайся\\s+з)\\s+(платформ|робот|колес|шасі|машин)\\p{L}*",
     )
 
+    // "котра година", "скільки зараз часу", "який час"
+    private val time = Regex("^(котра|яка)\\s+(зараз\\s+)?година|^скільки\\s+(зараз\\s+)?час\\p{L}*|^який\\s+(зараз\\s+)?час")
+
+    // "скільки заряду", "який у тебе заряд", "як батарея"
+    private val battery = Regex("заряд\\p{L}*|батаре\\p{L}*|акумулятор\\p{L}*")
+
     fun match(command: String): LocalCommand? {
         val text = command.lowercase().replace(Regex("[,.!?;:]"), " ").replace(Regex("\\s+"), " ").trim()
         return when {
@@ -32,6 +38,9 @@ object LocalCommands {
             findRobot.containsMatchIn(text) -> LocalCommand.FIND_ROBOT
             installUpdate.containsMatchIn(text) -> LocalCommand.INSTALL_UPDATE
             checkUpdate.containsMatchIn(text) -> LocalCommand.CHECK_UPDATE
+            time.containsMatchIn(text) -> LocalCommand.TIME
+            // Лише короткі питання: "постав мене на зарядку, а потім…" — уже до моделі.
+            battery.containsMatchIn(text) && text.split(' ').size <= 5 -> LocalCommand.BATTERY
             else -> null
         }
     }

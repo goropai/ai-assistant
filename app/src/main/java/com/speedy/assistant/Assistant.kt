@@ -42,6 +42,8 @@ class Assistant(
     private val findRobot: suspend () -> String?,
     private val updater: UpdateManager,
     private val chirps: ChirpPlayer,
+    /** Заряд у відсотках (-1 — невідомо) і чи заряджається. */
+    private val battery: () -> Pair<Int, Boolean> = { -1 to false },
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -220,6 +222,16 @@ class Assistant(
             LocalCommand.FIND_ROBOT -> return findPlatform()
             LocalCommand.CHECK_UPDATE -> return checkUpdates(install = false)
             LocalCommand.INSTALL_UPDATE -> return checkUpdates(install = true)
+            LocalCommand.TIME -> {
+                face.setMood(Mood.HAPPY)
+                return say("Зараз ${java.text.SimpleDateFormat("H:mm", java.util.Locale("uk", "UA")).format(java.util.Date())}.")
+            }
+            LocalCommand.BATTERY -> {
+                val (percent, charging) = battery()
+                if (percent < 0) return say("Не знаю, скільки в мене заряду.")
+                face.setMood(if (percent < Desires.LOW_BATTERY && !charging) Mood.SLEEPY else Mood.HAPPY)
+                return say("Мій заряд $percent ${BatteryAlerts.percentWord(percent)}" + if (charging) ", заряджаюсь." else ".")
+            }
             null -> {}
         }
 
