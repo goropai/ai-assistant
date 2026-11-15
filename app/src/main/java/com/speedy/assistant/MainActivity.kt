@@ -5,6 +5,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.BatteryManager
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -27,9 +29,14 @@ import com.speedy.assistant.settings.SettingsDialog
 import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
 import com.speedy.assistant.vision.PresenceWatcher
+import com.speedy.assistant.voice.Chirp
+import com.speedy.assistant.voice.ChirpPlayer
 import com.speedy.assistant.voice.Speaker
 import com.speedy.assistant.voice.VoiceListener
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import okhttp3.OkHttpClient
+import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
@@ -41,6 +48,9 @@ class MainActivity : AppCompatActivity() {
     private var assistantBusy = false
     private var lowPower = false
     private var resumed = false
+    private var batteryPercent = -1
+    private var charging = false
+    private var networkLost = false
     private val settings by lazy { AppSettings(this) }
     private val robot by lazy {
         // Короткі таймаути: якщо плата зникла, рух не має "висіти" 15 секунд.
@@ -108,6 +118,7 @@ class MainActivity : AppCompatActivity() {
             robot = robot,
             findRobot = { robot.rediscover() },
             updater = UpdateManager(this, http, BuildConfig.UPDATE_MANIFEST_URL, BuildConfig.VERSION_CODE),
+            chirps = ChirpPlayer(),
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
@@ -124,6 +135,15 @@ class MainActivity : AppCompatActivity() {
         // Тихо оновити адресу платформи: роутер міг видати їй нову IP.
         lifecycleScope.launch { robot.rediscover() }
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        connectivity.registerDefaultNetworkCallback(networkCallback)
+        lifecycleScope.launch {
+            while (isActive) {
+                delay(60_000)
+                val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                val near = presence?.summary.orEmpty().isNotBlank()
+                assistant?.checkDesires(hour, near, batteryPercent, charging)
+            }
+        }
         updatePresence()
         if (!settings.hasActiveKey) {
             face.setMood(Mood.SAD)
@@ -172,6 +192,8 @@ class MainActivity : AppCompatActivity() {
             if (level < 0 || scale <= 0) return
             val charging = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
             val percent = level * 100 / scale
+            this@MainActivity.batteryPercent = percent
+            this@MainActivity.charging = charging
             batteryAlerts.update(percent, charging)?.let { assistant?.announceLowBattery(percent) }
             // Нижче 15% без зарядки — камеру для присутності вимикаємо.
             val low = percent < 15 && !charging
@@ -182,8 +204,32 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val connectivity by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
+
+    /** Пропала / повернулась мережа — сигнал звуком (колбеки приходять не в головному потоці). */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLost(network: Network) {
+            runOnUiThread {
+                if (connectivity.activeNetwork != null || networkLost) return@runOnUiThread
+                networkLost = true
+                assistant?.chirp(Chirp.NO_NETWORK, Mood.SAD)
+            }
+        }
+
+        override fun onAvailable(network: Network) {
+            runOnUiThread {
+                if (!networkLost) return@runOnUiThread
+                networkLost = false
+                assistant?.chirp(Chirp.HAPPY, Mood.HAPPY)
+            }
+        }
+    }
+
     override fun onDestroy() {
-        if (assistant != null) unregisterReceiver(batteryReceiver)
+        if (assistant != null) {
+            unregisterReceiver(batteryReceiver)
+            connectivity.unregisterNetworkCallback(networkCallback)
+        }
         assistant?.release()
         presence?.release()
         speaker?.shutdown()

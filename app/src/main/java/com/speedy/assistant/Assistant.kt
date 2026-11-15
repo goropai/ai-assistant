@@ -16,6 +16,8 @@ import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
 import com.speedy.assistant.vision.Kind
 import com.speedy.assistant.vision.PresenceEvent
+import com.speedy.assistant.voice.Chirp
+import com.speedy.assistant.voice.ChirpPlayer
 import com.speedy.assistant.voice.Speaker
 import com.speedy.assistant.voice.VoiceListener
 import com.speedy.assistant.voice.WakeWord
@@ -39,6 +41,7 @@ class Assistant(
     private val robot: RobotPlatform,
     private val findRobot: suspend () -> String?,
     private val updater: UpdateManager,
+    private val chirps: ChirpPlayer,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -48,6 +51,9 @@ class Assistant(
     private var awaitingCommandUntil = 0L
     private var idleJob: Job? = null
     private var commandJob: Job? = null
+    private val desires = Desires()
+    /** Коли з нею востаннє взаємодіяли (для "нудьги"). */
+    private var lastInteraction = SystemClock.uptimeMillis()
 
     fun start() {
         if (!busy) ears.start()
@@ -69,9 +75,27 @@ class Assistant(
             while (busy) delay(500)
             runBusy {
                 face.setMood(Mood.SAD)
+                chirps.play(Chirp.LOW_BATTERY)
                 say("Мій заряд $level ${BatteryAlerts.percentWord(level)}. Постав мене, будь ласка, на зарядку.")
             }
         }
+    }
+
+    /** Сигнал стану без слів (мережа тощо). Якщо Спіді зайнята — пропускаємо. */
+    fun chirp(chirp: Chirp, mood: Mood? = null) {
+        if (busy) return
+        runBusy {
+            mood?.let { face.setMood(it) }
+            chirps.play(chirp)
+        }
+    }
+
+    /** Раз на хвилину: чи не хочеться чогось (на зарядку, уваги). */
+    fun checkDesires(hour: Int, someoneNear: Boolean, batteryPercent: Int, charging: Boolean) {
+        if (busy) return
+        val wish = desires.check(SystemClock.uptimeMillis(), hour, someoneNear, lastInteraction, batteryPercent, charging)
+            ?: return
+        chirp(wish, if (wish == Chirp.LOW_BATTERY) Mood.SLEEPY else Mood.HAPPY)
     }
 
     /** Тиха перевірка після запуску: говоримо лише тоді, коли знайшлася нова версія. */
@@ -107,22 +131,19 @@ class Assistant(
         }
     }
 
+    /** Вітання без слів: радісний звук і очі; говорить Спіді лише у відповідь. */
     private suspend fun greetArrival(kind: Kind) {
         when (kind) {
             Kind.PERSON -> {
                 face.setMood(Mood.HAPPY)
-                say(listOf("Привіт!", "О, привіт! Я тут.", "Рада тебе бачити!").random())
+                chirps.play(Chirp.HAPPY)
                 // Можна одразу казати команду, без "Спіді".
                 face.setMood(Mood.LISTENING)
                 awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
             }
-            Kind.CAT -> {
+            Kind.CAT, Kind.DOG -> {
                 face.setMood(Mood.SURPRISED)
-                say(listOf("Ой, котик!", "Кіця! Привіт, пухнастику.").random())
-            }
-            Kind.DOG -> {
-                face.setMood(Mood.SURPRISED)
-                say(listOf("Ой, песик!", "Привіт, собачко!").random())
+                chirps.play(Chirp.CURIOUS)
             }
         }
     }
@@ -149,6 +170,7 @@ class Assistant(
             ?: candidates.firstOrNull()?.takeIf { SystemClock.uptimeMillis() < awaitingCommandUntil }
             ?: return
         awaitingCommandUntil = 0
+        lastInteraction = SystemClock.uptimeMillis()
         runBusy { if (command.isBlank()) greet() else handle(command) }
     }
 
@@ -159,12 +181,14 @@ class Assistant(
         idleJob?.cancel()
         commandJob = scope.launch {
             try {
+                delay(VoiceListener.UNMUTE_DELAY_MS) // поки розпізнавач не замовкне, звук приглушено
                 block()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "command failed", e)
                 face.setMood(Mood.SAD)
+                if (e is LlmException || e is java.io.IOException) chirps.play(Chirp.NO_NETWORK)
                 if (e is MissingKeyException) say("Мені потрібен ключ API. Довго натисни на екран, щоб відкрити налаштування.")
                 else say(if (e is LlmException || e is java.io.IOException) "Ой, не можу зв'язатися зі своїм мозком. Перевір інтернет." else "Ой, щось пішло не так.")
             } finally {
@@ -177,10 +201,11 @@ class Assistant(
         }
     }
 
+    /** Звернулися без команди: коротке "бі-іп" замість слів — і чекаємо команду. */
     private suspend fun greet() {
+        lastInteraction = SystemClock.uptimeMillis()
         face.setMood(Mood.LISTENING)
-        say("Так? Слухаю!")
-        face.setMood(Mood.LISTENING)
+        chirps.play(Chirp.ACK)
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
     }
 
