@@ -51,7 +51,7 @@ class BrainTest {
         assertTrue(!texts[1].contains("дитина"))
     }
 
-        @Test
+    @Test
     fun pauseStartsNewConversation() = runBlocking {
         val llm = FakeLlm()
         var t = 0L
