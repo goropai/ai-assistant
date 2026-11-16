@@ -41,6 +41,31 @@
             </intent-filter>
         </activity>
 
+        <!-- Сповіщення інших застосунків ("що нового?") — доступ вмикає людина в налаштуваннях -->
+        <service
+            android:name=".phone.SpeedyNotifications"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- Керування застосунками голосом — службу вмикає людина (спеціальні можливості) -->
+        <service
+            android:name=".phone.SpeedyHands"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_hands" />
+        </service>
+
         <!-- Віддає завантажений APK системному інсталятору (file:// заборонено з Android 7) -->
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -59,6 +59,12 @@ class Assistant(
     private val english: com.speedy.assistant.english.EnglishCourse? = null,
     /** Чи є інтернет (англійський розпізнавач — онлайн). */
     private val isOnline: () -> Boolean = { true },
+    /** Чи Спіді на екрані (інакше відкритий інший застосунок). */
+    private val inForeground: () -> Boolean = { true },
+    /** Повернути Спіді на екран. */
+    private val bringToFront: () -> Unit = {},
+    /** Відкрити налаштування доступу: "notes" — сповіщення, "hands" — спеціальні можливості. */
+    private val openAccessSettings: (String) -> Unit = {},
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
@@ -525,6 +531,8 @@ class Assistant(
                 }
             }
         }
+        // Сповіщення й керування іншими застосунками — без моделі.
+        com.speedy.assistant.phone.HandsCommands.parse(command, otherAppOpen = !inForeground())?.let { return handleHands(it) }
         // Дії на телефоні — без моделі; якщо не вийшло (нема такого застосунку) — далі до моделі.
         com.speedy.assistant.phone.PhoneCommands.parse(command)?.let { if (handlePhone(it)) return }
         com.speedy.assistant.weather.Currency.parse(command)?.let { code -> if (tellRate(code)) return }
@@ -741,6 +749,72 @@ class Assistant(
             hz >= com.speedy.assistant.voice.Pitch.CHILD_HZ -> true
             hz <= com.speedy.assistant.voice.Pitch.ADULT_HZ -> false
             else -> null
+        }
+    }
+
+    private suspend fun handleHands(cmd: com.speedy.assistant.phone.HandsCommand) {
+        Log.i(TAG, "руки: $cmd")
+        val hands = com.speedy.assistant.phone.SpeedyHands.instance
+        when (cmd) {
+            com.speedy.assistant.phone.HandsCommand.AllowNotes -> {
+                say("Відкриваю налаштування. Увімкни для Спіді доступ до сповіщень.")
+                openAccessSettings("notes")
+            }
+            com.speedy.assistant.phone.HandsCommand.AllowHands -> {
+                say("Відкриваю спеціальні можливості. Увімкни службу «Спіді». У банківських застосунках і налаштуваннях я нічого не натискатиму.")
+                openAccessSettings("hands")
+            }
+            com.speedy.assistant.phone.HandsCommand.News, com.speedy.assistant.phone.HandsCommand.ReadNotes -> {
+                val notes = com.speedy.assistant.phone.NotificationStore.recent(5)
+                when {
+                    notes.isEmpty() -> say("Нових сповіщень немає. Якщо я їх не бачу — скажи «дозволь читати сповіщення».")
+                    cmd == com.speedy.assistant.phone.HandsCommand.News ->
+                        say("Останні: " + notes.joinToString("; ") { "${it.app}${it.title.takeIf { t -> t.isNotBlank() }?.let { t -> " від $t" }.orEmpty()}" } + ". Прочитати?")
+                    else -> say(notes.take(3).joinToString(". ") { "${it.app}, ${it.title}: ${it.text}" })
+                }
+            }
+            else -> {
+                if (hands == null) return say("Я ще не можу керувати телефоном. Скажи «дозволь керувати телефоном».")
+                if (cmd !is com.speedy.assistant.phone.HandsCommand.ComeBack && cmd !is com.speedy.assistant.phone.HandsCommand.Home) {
+                    hands.blockedApp()?.let { return say("У $it я нічого не роблю — тут гроші чи паролі. Зроби це сам.") }
+                }
+                val ok = when (cmd) {
+                    is com.speedy.assistant.phone.HandsCommand.Tap -> hands.click(cmd.text)
+                    is com.speedy.assistant.phone.HandsCommand.Scroll -> hands.scroll(cmd.down)
+                    com.speedy.assistant.phone.HandsCommand.Back -> hands.back()
+                    com.speedy.assistant.phone.HandsCommand.Home -> hands.home()
+                    is com.speedy.assistant.phone.HandsCommand.Type -> hands.type(cmd.text)
+                    com.speedy.assistant.phone.HandsCommand.Screen -> {
+                        val text = hands.screenText()
+                        say(if (text.isBlank()) "На екрані нічого не можу прочитати." else "${hands.currentApp()}: $text")
+                        true
+                    }
+                    com.speedy.assistant.phone.HandsCommand.ComeBack -> { bringToFront(); true }
+                    else -> false
+                }
+                if (!ok) say(
+                    when (cmd) {
+                        is com.speedy.assistant.phone.HandsCommand.Tap -> "Не знайшла «${cmd.text}» на екрані."
+                        is com.speedy.assistant.phone.HandsCommand.Type -> "Не бачу поля, куди писати. Натисни на нього."
+                        else -> "Не вийшло."
+                    }
+                )
+            }
+        }
+    }
+
+    private var lastNoteAnnounced = 0L
+
+    /** Нове сповіщення: коротко "Повідомлення у Viber від мами" — без тексту (його — на прохання). */
+    fun announceNote(note: com.speedy.assistant.phone.Note) {
+        val now = SystemClock.uptimeMillis()
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        if (busy || now - lastNoteAnnounced < 60_000 || hour < 8 || hour >= 22) return
+        if (com.speedy.assistant.phone.Safety.blocked("", note.app)) return // банки — не вголос
+        lastNoteAnnounced = now
+        runBusy {
+            chirps.play(Chirp.ATTENTION)
+            say("Повідомлення у ${note.app}${note.title.takeIf { it.isNotBlank() }?.let { " від $it" }.orEmpty()}.")
         }
     }
 

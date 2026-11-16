@@ -189,6 +189,15 @@ class MainActivity : AppCompatActivity() {
             profiles = profiles,
             reminders = reminders,
             english = englishCourse,
+            inForeground = { resumed },
+            bringToFront = {
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
+            },
+            openAccessSettings = { which ->
+                val action = if (which == "notes") "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"
+                else android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
+                try { startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { toast("Не вдалося відкрити налаштування") }
+            },
             isOnline = { !networkLost && connectivity.activeNetwork != null },
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
@@ -210,6 +219,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { robot.rediscover() }
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         connectivity.registerDefaultNetworkCallback(networkCallback)
+        com.speedy.assistant.phone.NotificationStore.onNew = { note -> runOnUiThread { assistant?.announceNote(note) } }
         // Офлайн-слух: модель 78 МБ — завантажуємо лише через Wi-Fi (не мобільний трафік), один раз.
         lifecycleScope.launch {
             // Не вийшло (повільний сайт, немає Wi-Fi) — пробуємо знову кожні 10 хв; до того слухає Google.
@@ -284,7 +294,8 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         resumed = false
         updatePresence()
-        assistant?.stop()
+        // Керування застосунками увімкнено — слухаємо й у фоні ("натисни…", "повернись").
+        if (com.speedy.assistant.phone.SpeedyHands.instance == null) assistant?.stop()
         super.onPause()
     }
 
