@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { END_CONVERSATION, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { END_CONVERSATION, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -38,6 +38,14 @@ object LocalCommands {
         "(мене\\s+звати|моє\\s+(?:справжнє\\s+)?ім.я|запам.ятай\\s+мене\\s+я|познайомся\\s+я|" +
             "називай\\s+мене|клич\\s+мене|звертайся\\s+до\\s+мене)\\s+(\\p{L}[\\p{L}'’-]*)",
     )
+    // "забудь Каву", "забудь ім'я Каву", "видали Каву" — помилкові імена
+    private val forgetName = Regex("^(?:забудь|видали|зітри)\\s+(?:ім.я\\s+|людину\\s+)?(\\p{L}[\\p{L}'’-]*)$")
+    private val listPeople = Regex("^(?:кого\\s+ти\\s+(?:знаєш|пам.ятаєш)|яких\\s+людей\\s+ти\\s+знаєш|кого\\s+ти\\s+запам.ятала)")
+
+    /** Ім'я з "забудь Каву" (не "забудь мене"). */
+    fun parseForgetName(phrase: String): String? =
+        forgetName.find(normalize(phrase))?.groupValues?.get(1)?.takeIf { it != "мене" && it != "все" && it != "це" }
+
     private val forgetMe = Regex("^забудь\\s+(мене|моє\\s+обличчя)")
     private val aboutMe = Regex("що\\s+ти\\s+(?:про\\s+мене\\s+)?(?:знаєш|пам.ятаєш)(?:\\s+про\\s+мене)?|розкажи\\s+(?:що\\s+)?(?:ти\\s+)?знаєш\\s+про\\s+мене")
     private val whoAmI = Regex("^(хто\\s+я|ти\\s+мене\\s+знаєш|ти\\s+мене\\s+пам.ятаєш|як\\s+мене\\s+звати)")
@@ -60,14 +68,23 @@ object LocalCommands {
             ?.takeIf { it !in notNames && it.length >= 2 }?.replaceFirstChar { it.uppercase() }
 
     // "це не Костя, це Ніна", "я не Бетмен, я Тарас", "мене звати не Костя, а Ніна", "не Костя а Ніна"
+    // Лише явні форми з початку фрази: "це не Костя, (а|це) Ніна", "я не Костя, (а) я Ніна",
+    // "мене звати не Костя, а Ніна". Раніше ловило будь-яке "…не X Y" ("котики не п'ють каву").
     private val correction = Regex(
-        "(?:^|\\s)(?:це|я|мене\\s+звати)?\\s*не\\s+(\\p{L}[\\p{L}'’-]*)\\s+(?:а\\s+)?(?:це\\s+|я\\s+)?(\\p{L}[\\p{L}'’-]*)$",
+        "^(?:" +
+            "це\\s+не\\s+(\\p{L}[\\p{L}'’-]*)\\s+(?:а|це|а\\s+це)\\s+(\\p{L}[\\p{L}'’-]*)" +
+            "|я\\s+не\\s+(\\p{L}[\\p{L}'’-]*)\\s+(?:а\\s+)?я\\s+(\\p{L}[\\p{L}'’-]*)" +
+            "|мене\\s+звати\\s+не\\s+(\\p{L}[\\p{L}'’-]*)\\s+а\\s+(\\p{L}[\\p{L}'’-]*)" +
+            ")$",
     )
 
     /** "це не Костя, це Ніна" → ("Костя", "Ніна"). */
     fun parseCorrection(phrase: String): Pair<String, String>? {
         val m = correction.find(normalize(phrase)) ?: return null
-        val (wrong, right) = m.destructured
+        // Три форми — три пари груп; заповнена лише одна.
+        val groups = m.groupValues.drop(1)
+        val pair = groups.chunked(2).firstOrNull { it[0].isNotEmpty() } ?: return null
+        val (wrong, right) = pair[0] to pair[1]
         if (right in notNames || right.length < 2 || wrong == right) return null
         return wrong.replaceFirstChar { it.uppercase() } to right.replaceFirstChar { it.uppercase() }
     }
@@ -107,6 +124,8 @@ object LocalCommands {
             correction.containsMatchIn(text) && parseCorrection(text) != null -> LocalCommand.CORRECT_NAME
             introduce.containsMatchIn(text) -> LocalCommand.INTRODUCE
             forgetMe.containsMatchIn(text) -> LocalCommand.FORGET_ME
+            parseForgetName(text) != null -> LocalCommand.FORGET_NAME
+            listPeople.containsMatchIn(text) -> LocalCommand.LIST_PEOPLE
             aboutMe.containsMatchIn(text) && "мене" in text -> LocalCommand.ABOUT_ME
             whoAmI.containsMatchIn(text) -> LocalCommand.WHO_AM_I
             where.containsMatchIn(text) -> LocalCommand.WHERE

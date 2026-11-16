@@ -30,6 +30,18 @@ class People(private val book: FaceBook) {
     @Synchronized
     fun knows(name: String): Boolean = name in book.names
 
+    @Synchronized
+    fun names(): List<String> = book.names.toList()
+
+    /** Знайоме ім'я, схоже на сказане з урахуванням відмінка ("Костю" → "Костя"). */
+    @Synchronized
+    fun findName(spoken: String): String? {
+        val s = spoken.lowercase()
+        book.names.firstOrNull { it.lowercase() == s }?.let { return it }
+        val stem = if (s.length > 3) s.dropLast(1) else s
+        return book.names.filter { it.lowercase().startsWith(stem) }.singleOrNull()
+    }
+
     /**
      * Людина в кадрі — насправді [name] (назвалась жартома або її сплутали з кимось).
      * false — обличчя щойно не було видно.

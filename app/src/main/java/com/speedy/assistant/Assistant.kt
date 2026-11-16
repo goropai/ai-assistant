@@ -372,6 +372,9 @@ class Assistant(
                 val (wrong, right) = LocalCommands.parseCorrection(command) ?: return say("Не розчула. Скажи ще раз?")
                 val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
                 val before = p.presentNames(SystemClock.uptimeMillis())
+                // Запобіжник: "неправильне" ім'я — саме те, яким Спіді щойно назвала людину в кадрі.
+                // Інакше це звичайна фраза ("я не в червоному") — хай відповідає модель.
+                if (before.none { it.equals(wrong, ignoreCase = true) }) return askModel(command)
                 if (!p.reassign(right, SystemClock.uptimeMillis()).also { ok -> if (ok) moveProfiles(before, right) }) {
                     face.setMood(Mood.THINKING)
                     return say("Подивись на мене, щоб я побачила обличчя, і скажи ще раз.")
@@ -396,6 +399,21 @@ class Assistant(
                 profiles?.forget(name)
                 face.setMood(Mood.SAD)
                 return say("Добре, я забула тебе, $name.")
+            }
+            LocalCommand.FORGET_NAME -> {
+                val spoken = LocalCommands.parseForgetName(command) ?: return say("Кого саме забути?")
+                val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
+                val name = p.findName(spoken) ?: return say("Я не знаю нікого на ім'я ${spoken.replaceFirstChar { it.uppercase() }}.")
+                p.forget(name)
+                profiles?.forget(name)
+                Log.i(TAG, "забула ім'я $name")
+                face.setMood(Mood.NEUTRAL)
+                return say("Добре, забула $name.")
+            }
+            LocalCommand.LIST_PEOPLE -> {
+                val names = people?.names().orEmpty()
+                face.setMood(Mood.HAPPY)
+                return say(if (names.isEmpty()) "Я ще ні з ким не знайома." else "Я знаю: ${names.joinToString(", ")}.")
             }
             LocalCommand.ABOUT_ME -> {
                 val name = partner() ?: return askName()
@@ -440,6 +458,11 @@ class Assistant(
         com.speedy.assistant.phone.PhoneCommands.parse(command)?.let { if (handlePhone(it)) return }
         com.speedy.assistant.weather.Currency.parse(command)?.let { code -> if (tellRate(code)) return }
 
+        askModel(command)
+    }
+
+    /** Агентний цикл із моделлю: відповісти, подивитись, пошукати, поїхати — поки не досягне мети. */
+    private suspend fun askModel(command: String) {
         face.setMood(Mood.THINKING)
         var reply = ask(command)
         var looks = 0
