@@ -24,6 +24,37 @@ class FaceBook(private val file: File?) {
             .maxByOrNull { it.second }
             ?.takeIf { it.second >= threshold }
 
+    /** Результат перевірки нового обличчя перед записом. */
+    sealed interface Check {
+        /** Узгоджені кадри, жодного збігу з відомими — можна запам'ятати. */
+        class New(val samples: List<FloatArray>) : Check
+        /** Схоже на вже відоме обличчя — нове ім'я не створюємо. */
+        data class LooksLike(val name: String, val similarity: Float) : Check
+        /** Замало чітких узгоджених кадрів. */
+        data object Unclear : Check
+    }
+
+    /**
+     * Перевірка нового образу проти всіх наявних: спершу відкидаємо розмиті/випадкові кадри
+     * (лишаються ті, що схожі між собою), потім кожен звіряємо з усіма відомими обличчями.
+     */
+    fun check(samples: List<FloatArray>): Check {
+        val consistent = consistent(samples)
+        if (consistent.size < MIN_CONSISTENT) return Check.Unclear
+        // Суворіше за звичайне впізнавання: нове ім'я — лише якщо образ не схожий ні на кого навіть трохи.
+        val best = consistent.mapNotNull { match(it, POSSIBLE_MATCH) }.maxByOrNull { it.second }
+        return if (best != null) Check.LooksLike(best.first, best.second) else Check.New(consistent)
+    }
+
+    /** Кадри, схожі з більшістю інших (≥ [CONSISTENT]) — один і той самий чіткий образ. */
+    private fun consistent(samples: List<FloatArray>): List<FloatArray> {
+        if (samples.size <= 1) return samples
+        return samples.filterIndexed { i, s ->
+            val similar = samples.indices.count { j -> j != i && cosine(s, samples[j]) >= CONSISTENT }
+            similar * 2 >= samples.size - 1
+        }
+    }
+
     /** Додати зразки обличчя; найстаріші відкидаються, щоб не роздувати файл. */
     fun remember(name: String, embeddings: List<FloatArray>) {
         if (embeddings.isEmpty()) return
@@ -95,6 +126,11 @@ class FaceBook(private val file: File?) {
         /** Косинус 0.6 ≈ квадрат відстані 0.8 між нормованими векторами (поріг авторів моделі). */
         const val MATCH_THRESHOLD = 0.6f
         const val MAX_SAMPLES = 8
+        /** Кадри одного образу мають бути схожі між собою щонайменше так. */
+        const val CONSISTENT = 0.7f
+        /** Поріг "можливо, та сама людина" для перевірки перед записом нового імені (впізнавання — 0.6). */
+        const val POSSIBLE_MATCH = 0.5f
+        const val MIN_CONSISTENT = 2
         /** Так схожі зразки — майже напевно та сама людина (поріг упізнавання — 0.6). */
         const val SAME_PERSON = 0.8f
 

@@ -186,10 +186,16 @@ class Assistant(
         val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
         val introduced = p.introduce(name, SystemClock.uptimeMillis())
         Log.i(TAG, "знайомство $name: $introduced")
-        if (introduced) {
+        if (introduced == People.Introduction.Remembered) {
             face.setMood(Mood.HAPPY)
             chirps.play(Chirp.HAPPY)
             say("Приємно познайомитись, $name! Я тебе запам'ятала.")
+        } else if (introduced is People.Introduction.LooksLike) {
+            face.setMood(Mood.THINKING)
+            say("Ти дуже схожий на ${introduced.name}. Якщо я помиляюсь, скажи: «це не ${introduced.name}, це $name».")
+        } else if (introduced == People.Introduction.Unclear) {
+            face.setMood(Mood.THINKING)
+            say("Я тебе погано роздивилась. Подивись на мене рівно кілька секунд і скажи ще раз.")
         } else {
             val now = SystemClock.uptimeMillis()
             val known = p.presentNames(now)

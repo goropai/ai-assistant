@@ -46,7 +46,7 @@ class FacesTest {
         val face = FaceObservation(child, 0.1f)
         people.update(0, listOf(face))
         assertEquals(listOf(PresenceEvent.Stranger), people.update(1500, listOf(face)))
-        assertTrue(people.introduce("Валя", 2000))
+        assertEquals(People.Introduction.Remembered, people.introduce("Валя", 2000))
         // Тепер це знайоме обличчя.
         people.update(3000, listOf(face))
         assertEquals(listOf(PresenceEvent.Recognized("Валя")), people.update(4500, listOf(face)))
@@ -58,7 +58,7 @@ class FacesTest {
         val far = FaceObservation(child, 0.01f)
         people.update(0, listOf(far))
         assertTrue(people.update(1500, listOf(far)).isEmpty())
-        assertTrue(!people.introduce("Хтось", 2000))
+        assertEquals(People.Introduction.NoFace, people.introduce("Хтось", 2000))
     }
 
     @Test
@@ -68,7 +68,7 @@ class FacesTest {
         val face = FaceObservation(child, 0.1f)
         people.update(0, listOf(face))
         people.update(1500, listOf(face))
-        assertTrue(people.introduce("Бетмен", 2000))
+        assertEquals(People.Introduction.Remembered, people.introduce("Бетмен", 2000))
         people.update(3000, listOf(face))
         people.update(4500, listOf(face))
         assertEquals(listOf("Бетмен"), people.presentNames(4500))
@@ -105,6 +105,31 @@ class FacesTest {
         assertTrue(people.reassign("Тарас", 2000))
         assertEquals("Тарас", book.match(adult)?.first)
         assertTrue("Бетмен" !in book.names)
+    }
+
+    @Test
+    fun newFaceCheckedAgainstAllKnown() {
+        val book = FaceBook(null).apply { remember("Тарас", listOf(adult)) }
+        val people = People(book)
+        // Тарас під іншим кутом/світлом: схожість 0.55 — нижче порогу впізнавання (0.6), тож він
+        // "незнайомець", але перевірка перед записом (0.5) знаходить Тараса — нове ім'я не створюється.
+        val almostOleg = vec(0.55f, 0.835f, 0f)
+        people.update(0, listOf(FaceObservation(almostOleg, 0.1f)))
+        people.update(1500, listOf(FaceObservation(almostOleg, 0.1f)))
+        people.update(3000, listOf(FaceObservation(almostOleg, 0.1f)))
+        val result = people.introduce("Каву", 3500)
+        assertEquals(People.Introduction.LooksLike("Тарас"), result)
+        assertTrue("Каву" !in book.names)
+    }
+
+    @Test
+    fun blurryInconsistentFramesNotRemembered() {
+        val people = People(FaceBook(null))
+        // Кадри, що не схожі між собою (рух, розмиття) — не один образ.
+        people.update(0, listOf(FaceObservation(vec(1f, 0f, 0f), 0.1f)))
+        people.update(1500, listOf(FaceObservation(vec(0f, 1f, 0f), 0.1f)))
+        people.update(3000, listOf(FaceObservation(vec(0f, 0f, 1f), 0.1f)))
+        assertEquals(People.Introduction.Unclear, people.introduce("Хтось", 3500))
     }
 
     @Test

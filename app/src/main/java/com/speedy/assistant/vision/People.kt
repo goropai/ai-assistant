@@ -14,14 +14,36 @@ class People(private val book: FaceBook) {
     @Synchronized
     fun presentNames(now: Long): List<String> = tracker.presentNames(now)
 
-    /** Прив'язати ім'я до щойно баченого незнайомого обличчя. false — обличчя не бачили. */
+    sealed interface Introduction {
+        data object Remembered : Introduction
+        /** Обличчя не бачили нещодавно. */
+        data object NoFace : Introduction
+        data object Unclear : Introduction
+        data class LooksLike(val name: String) : Introduction
+    }
+
+    /**
+     * Прив'язати ім'я до щойно баченого незнайомого обличчя — лише після перевірки проти
+     * всіх відомих облич: схоже на когось — нове ім'я не створюємо.
+     */
     @Synchronized
-    fun introduce(name: String, now: Long): Boolean {
+    fun introduce(name: String, now: Long): Introduction {
         val samples = tracker.recentStranger(now)
-        if (samples.isEmpty()) return false
-        book.remember(name, samples)
-        tracker.clearStranger()
-        return true
+        if (samples.isEmpty()) return Introduction.NoFace
+        return when (val check = book.check(samples)) {
+            is FaceBook.Check.New -> {
+                book.remember(name, check.samples)
+                tracker.clearStranger()
+                Introduction.Remembered
+            }
+            is FaceBook.Check.LooksLike ->
+                if (check.name.equals(name, ignoreCase = true)) {
+                    book.remember(check.name, samples) // той самий — лише уточнюємо образ
+                    tracker.clearStranger()
+                    Introduction.Remembered
+                } else Introduction.LooksLike(check.name)
+            FaceBook.Check.Unclear -> Introduction.Unclear
+        }
     }
 
     @Synchronized
