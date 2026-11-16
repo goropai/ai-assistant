@@ -75,7 +75,10 @@ class GeminiClient(
                     429 -> GeminiModels.Failure.RATE_LIMIT
                     404 -> GeminiModels.Failure.NOT_FOUND
                     in 500..599 -> GeminiModels.Failure.UNAVAILABLE
-                    else -> throw e // 400/401/403 — проблема запиту чи ключа, інша модель не допоможе
+                    // 400 від окремої моделі — вона не підтримує щось із запиту (схему, thinking);
+                    // інші моделі можуть упоратись, а цю — надовго в бік.
+                    400 -> GeminiModels.Failure.NOT_FOUND
+                    else -> throw e // 401/403 — проблема ключа, інша модель не допоможе
                 }
                 Log.w(TAG, "$candidate: HTTP ${e.code}, пробую іншу модель")
                 models.failed(candidate, failure, now())
