@@ -1014,7 +1014,8 @@ class Assistant(
         const val CONVERSATION_WINDOW_MS = 45_000L
         /** Хтось сидить перед Спіді — фраза протягом цього часу після розмови теж до неї. */
         const val NEAR_CONTINUATION_MS = 120_000L
-        const val LESSON_LISTEN_MS = 9_000L
+        /** Дитина й розпізнавач повільні — 9 с не вистачало, відповідь приходила вже після. */
+        const val LESSON_LISTEN_MS = 14_000L
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 3
         const val SETTLE_MS = 300L

@@ -38,7 +38,9 @@ object Pitch {
         // Октавні помилки: кратні періоду дають майже такі самі піки — беремо найкоротший
         // період (перший локальний пік), що майже не поступається найкращому.
         for (lag in minLag + 1 until bestLag) {
-            if (corr[lag] >= best * 0.9 && corr[lag] >= corr[lag - 1] && corr[lag] >= corr[lag + 1]) return rate.toFloat() / lag
+            // 0.8: на живому голосі пік справжнього періоду буває помітно нижчим за подвійний
+            // (дитячі 316 Гц зчитувались як 158).
+            if (corr[lag] >= best * 0.8 && corr[lag] >= corr[lag - 1] && corr[lag] >= corr[lag + 1]) return rate.toFloat() / lag
         }
         return rate.toFloat() / bestLag
     }
