@@ -16,7 +16,8 @@ data class Sighting(val kind: Kind, val score: Float, val cx: Float, val cy: Flo
 
 sealed interface PresenceEvent {
     /** Хтось з'явився (після відсутності) — привід привітатися. */
-    data class Arrived(val kind: Kind) : PresenceEvent
+    /** [name] — ім'я знайомої тварини (для людей — див. [Recognized]). */
+    data class Arrived(val kind: Kind, val name: String? = null) : PresenceEvent
 
     /** Куди дивитися очима: -1..1 у координатах екрана (x вправо, y вниз). */
     data class Look(val x: Float, val y: Float) : PresenceEvent

@@ -37,6 +37,13 @@ class CommandsTest {
     }
 
     @Test
+    fun wakeWordAtEnd() {
+        assertEquals("А хто це там сидить", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("А хто це там сидить, Спіді")))
+        assertEquals("котра година", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("Спіді, котра година")))
+        assertEquals(null, com.speedy.assistant.voice.WakeWord.extractCommand(listOf("я купив спідниці")))
+    }
+
+    @Test
     fun timeAndBattery() {
         listOf("котра година", "Котра зараз година?", "скільки часу", "який зараз час").forEach {
             assertEquals(it, LocalCommand.TIME, LocalCommands.match(it))

@@ -30,6 +30,8 @@ class PresenceWatcher(
     private val owner: LifecycleOwner,
     /** Пам'ять облич; null — розпізнавання облич вимкнено. */
     private val people: People? = null,
+    /** Імена домашніх тварин; null — не запам'ятовуємо. */
+    private val pets: Pets? = null,
     private val onEvents: (List<PresenceEvent>) -> Unit,
 ) {
     private val executor = Executors.newSingleThreadExecutor()
@@ -41,6 +43,7 @@ class PresenceWatcher(
     private var faces: FaceRecognizer? = null
     private var facesBroken = false
     private var lastRun = 0L
+    private var lastKinds = emptySet<Kind>()
     /** Прив'язка камери асинхронна: між start() і готовністю провайдера могли викликати stop(). */
     private var wanted = false
     private var binding = false
@@ -105,7 +108,11 @@ class PresenceWatcher(
             val model = detector() ?: return
             val frame = upright(it.toBitmap(), it.imageInfo.rotationDegrees)
 
-            val sightings = model.detect(frame, SCORE_THRESHOLD).take(MAX_RESULTS).mapNotNull { d ->
+            val detections = model.detect(frame, DIAG_THRESHOLD)
+            // Кіт чи собака з низькою впевненістю — у лог, щоб було видно, чи модель їх узагалі помічає.
+            detections.filter { d -> d.score < SCORE_THRESHOLD && Kind.fromCoco(d.cocoClass).let { it == Kind.CAT || it == Kind.DOG } }
+                .forEach { d -> Log.d(TAG, "майже ${Kind.fromCoco(d.cocoClass)?.ua}: %.2f".format(d.score)) }
+            val sightings = detections.filter { d -> d.score >= SCORE_THRESHOLD }.take(MAX_RESULTS).mapNotNull { d ->
                 val kind = Kind.fromCoco(d.cocoClass) ?: return@mapNotNull null
                 Sighting(
                     kind = kind,
@@ -115,7 +122,25 @@ class PresenceWatcher(
                     area = (d.right - d.left) * (d.bottom - d.top),
                 )
             }
-            val events = tracker.update(now, sightings).toMutableList()
+            val kinds = sightings.map { s -> s.kind }.toSet()
+            if (kinds != lastKinds) {
+                Log.i(TAG, "бачу: ${kinds.joinToString { k -> k.ua }.ifEmpty { "нікого" }} " +
+                    sightings.joinToString(prefix = "(", postfix = ")") { s -> "%s %.2f".format(s.kind.ua, s.score) })
+                lastKinds = kinds
+            }
+            // Найбільша тварина в кадрі — її забарвлення для впізнавання.
+            val petNames = HashMap<Kind, String>()
+            if (pets != null) {
+                detections.filter { d -> d.score >= SCORE_THRESHOLD && Kind.fromCoco(d.cocoClass).let { it == Kind.CAT || it == Kind.DOG } }
+                    .maxByOrNull { d -> (d.right - d.left) * (d.bottom - d.top) }
+                    ?.let { d ->
+                        val kind = Kind.fromCoco(d.cocoClass)!!
+                        pets.observe(kind, Pets.signature(frame, d.left, d.top, d.right, d.bottom), now)?.let { petNames[kind] = it }
+                    }
+            }
+            val events = tracker.update(now, sightings)
+                .map { e -> if (e is PresenceEvent.Arrived && e.kind in petNames) e.copy(name = petNames[e.kind]) else e }
+                .toMutableList()
             if (people != null && sightings.any { s -> s.kind == Kind.PERSON }) {
                 faceRecognizer()?.let { recognizer ->
                     val observed = try {
@@ -128,7 +153,8 @@ class PresenceWatcher(
                 }
             }
             val names = people?.presentNames(now).orEmpty()
-            summary = (names + tracker.summary()).filter { s -> s.isNotBlank() }.joinToString(", ")
+            val petsNear = petNames.map { (kind, name) -> "${kind.ua} $name" }
+            summary = (names + petsNear + tracker.summary()).filter { s -> s.isNotBlank() }.joinToString(", ")
             if (events.isNotEmpty()) main.post { onEvents(events) }
         }
     }
@@ -170,5 +196,6 @@ class PresenceWatcher(
         const val INTERVAL_MS = 1500L
         const val SCORE_THRESHOLD = 0.5f
         const val MAX_RESULTS = 5
+        const val DIAG_THRESHOLD = 0.25f
     }
 }

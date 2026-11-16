@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, WEATHER, WHERE }
+enum class LocalCommand { STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -36,7 +36,7 @@ object LocalCommands {
     // "я не Бетмен я Тарас" — і знайомство, і виправлення жартівливого імені.
     private val introduce = Regex(
         "(мене\\s+звати|моє\\s+(?:справжнє\\s+)?ім.я|запам.ятай\\s+мене\\s+я|познайомся\\s+я|" +
-            "називай\\s+мене|клич\\s+мене|звертайся\\s+до\\s+мене|я\\s+не\\s+\\p{L}+\\s+(?:а\\s+)?я)\\s+(\\p{L}[\\p{L}'’-]*)",
+            "називай\\s+мене|клич\\s+мене|звертайся\\s+до\\s+мене)\\s+(\\p{L}[\\p{L}'’-]*)",
     )
     private val forgetMe = Regex("^забудь\\s+(мене|моє\\s+обличчя)")
     private val whoAmI = Regex("^(хто\\s+я|ти\\s+мене\\s+знаєш|ти\\s+мене\\s+пам.ятаєш|як\\s+мене\\s+звати)")
@@ -45,6 +45,31 @@ object LocalCommands {
     /** Ім'я з фрази знайомства ("мене звати Тарас") або з відповіді на "як тебе звати?" ("Тарас", "я Тарас"). */
     // "де ми", "де я", "де ти зараз", "де ми знаходимось"
     private val where = Regex("^де\\s+(ми|я|ти)(\\s+(зараз|знаходимо?ся|знаходишся|знаходимось))?$")
+
+    // "кота звати Мурчик", "його звати Мурчик", "це наш кіт Мурчик", "назви кота Мурчик"
+    private val namePet = Regex(
+        "^(?:(?:кота|котика|кицю|кішку|кицьку|собаку|пса|песика|цуценя)\\s+звати|(?:його|її)\\s+звати|" +
+            "це\\s+(?:наш|наша|мій|моя)?\\s*(?:кіт|котик|кицька|кішка|киця|пес|песик|собака)|" +
+            "назви\\s+(?:кота|кицю|собаку|песика)|кличуть\\s+(?:кота|кицю|собаку|песика))\\s+(\\p{L}[\\p{L}'’-]*)",
+    )
+
+    /** Ім'я тварини з фрази ("кота звати Мурчик"). */
+    fun parsePetName(phrase: String): String? =
+        namePet.find(normalize(phrase))?.groupValues?.get(1)
+            ?.takeIf { it !in notNames && it.length >= 2 }?.replaceFirstChar { it.uppercase() }
+
+    // "це не Костя, це Ніна", "я не Бетмен, я Тарас", "мене звати не Костя, а Ніна", "не Костя а Ніна"
+    private val correction = Regex(
+        "(?:^|\\s)(?:це|я|мене\\s+звати)?\\s*не\\s+(\\p{L}[\\p{L}'’-]*)\\s+(?:а\\s+)?(?:це\\s+|я\\s+)?(\\p{L}[\\p{L}'’-]*)$",
+    )
+
+    /** "це не Костя, це Ніна" → ("Костя", "Ніна"). */
+    fun parseCorrection(phrase: String): Pair<String, String>? {
+        val m = correction.find(normalize(phrase)) ?: return null
+        val (wrong, right) = m.destructured
+        if (right in notNames || right.length < 2 || wrong == right) return null
+        return wrong.replaceFirstChar { it.uppercase() } to right.replaceFirstChar { it.uppercase() }
+    }
 
     fun parseName(phrase: String, answer: Boolean = false): String? {
         val text = normalize(phrase)
@@ -70,6 +95,8 @@ object LocalCommands {
             findRobot.containsMatchIn(text) -> LocalCommand.FIND_ROBOT
             installUpdate.containsMatchIn(text) -> LocalCommand.INSTALL_UPDATE
             checkUpdate.containsMatchIn(text) -> LocalCommand.CHECK_UPDATE
+            namePet.containsMatchIn(text) -> LocalCommand.NAME_PET
+            correction.containsMatchIn(text) && parseCorrection(text) != null -> LocalCommand.CORRECT_NAME
             introduce.containsMatchIn(text) -> LocalCommand.INTRODUCE
             forgetMe.containsMatchIn(text) -> LocalCommand.FORGET_ME
             whoAmI.containsMatchIn(text) -> LocalCommand.WHO_AM_I

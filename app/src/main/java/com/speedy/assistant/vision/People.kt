@@ -27,6 +27,20 @@ class People(private val book: FaceBook) {
     @Synchronized
     fun forget(name: String): Boolean = book.forget(name)
 
+    /**
+     * Людина в кадрі — насправді [name] (назвалась жартома або її сплутали з кимось).
+     * false — обличчя щойно не було видно.
+     */
+    @Synchronized
+    fun reassign(name: String, now: Long): Boolean {
+        val faces = tracker.recentFaces(now)
+        if (faces.isEmpty()) return false
+        val before = tracker.presentNames(now)
+        book.reassign(name, faces)
+        before.forEach { tracker.renamed(it, name, now) }
+        return true
+    }
+
     /** Знайомий, що зараз поруч, назвався інакше — міняємо ім'я, обличчя лишаються. */
     @Synchronized
     fun rename(old: String, new: String, now: Long): Boolean = book.rename(old, new).also {

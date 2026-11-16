@@ -46,6 +46,7 @@ class Assistant(
     /** Заряд у відсотках (-1 — невідомо) і чи заряджається. */
     private val battery: () -> Pair<Int, Boolean> = { -1 to false },
     private val people: People? = null,
+    private val pets: com.speedy.assistant.vision.Pets? = null,
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
@@ -57,6 +58,8 @@ class Assistant(
     private var awaitingCommandUntil = 0L
     /** Спитала "як тебе звати?" — наступна фраза, ймовірно, ім'я. */
     private var awaitingName = false
+    /** Спитала "як його звати?" про тварину — наступна фраза, ймовірно, кличка. */
+    private var awaitingPetName = false
     private var idleJob: Job? = null
     private var commandJob: Job? = null
     private val desires = Desires()
@@ -126,6 +129,8 @@ class Assistant(
 
     /** Події від локальної моделі присутності. */
     fun onPresence(events: List<PresenceEvent>) {
+        events.filter { it !is PresenceEvent.Look }.takeIf { it.isNotEmpty() }
+            ?.let { Log.i(TAG, "присутність: $it${if (busy) " (зайнята — пропускаю)" else ""}") }
         if (busy) return
         // Обличчя важливіші за загальне "хтось прийшов": вітаємо на ім'я або знайомимось.
         events.firstOrNull { it is PresenceEvent.Recognized || it is PresenceEvent.Stranger }?.let { event ->
@@ -138,7 +143,7 @@ class Assistant(
             when (event) {
                 is PresenceEvent.Look -> face.lookAt(event.x, event.y)
                 is PresenceEvent.Arrived -> {
-                    runBusy { greetArrival(event.kind) }
+                    runBusy { greetArrival(event.kind, event.name) }
                     return
                 }
                 PresenceEvent.Lost -> face.lookAt(0f, 0f)
@@ -168,7 +173,9 @@ class Assistant(
     private suspend fun introduce(name: String) {
         awaitingName = false
         val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
-        if (p.introduce(name, SystemClock.uptimeMillis())) {
+        val introduced = p.introduce(name, SystemClock.uptimeMillis())
+        Log.i(TAG, "знайомство $name: $introduced")
+        if (introduced) {
             face.setMood(Mood.HAPPY)
             chirps.play(Chirp.HAPPY)
             say("Приємно познайомитись, $name! Я тебе запам'ятала.")
@@ -180,8 +187,8 @@ class Assistant(
                     face.setMood(Mood.HAPPY)
                     say("Так, я знаю, ти $name!")
                 }
-                // Назвався жартома, а тепер каже справжнє ім'я — обличчя те саме, міняємо ім'я.
-                known.size == 1 && p.rename(known.first(), name, now) -> {
+                // Назвався жартома, а тепер каже справжнє ім'я — переносимо саме це обличчя.
+                known.size == 1 && p.reassign(name, now) -> {
                     face.setMood(Mood.HAPPY)
                     chirps.play(Chirp.HAPPY)
                     say("Добре, тепер я знаю, що ти $name, а не ${known.first()}.")
@@ -198,8 +205,23 @@ class Assistant(
         }
     }
 
+    private suspend fun namePet(name: String) {
+        awaitingPetName = false
+        val p = pets ?: return say("Я поки не вмію запам'ятовувати тварин.")
+        val named = p.name(name, SystemClock.uptimeMillis())
+        Log.i(TAG, "кличка $name: ${if (named) "запам'ятала" else "тварини в кадрі не було"}")
+        if (named) {
+            face.setMood(Mood.HAPPY)
+            chirps.play(Chirp.HAPPY)
+            say("$name! Гарне ім'я. Запам'ятала.")
+        } else {
+            face.setMood(Mood.THINKING)
+            say("Я зараз не бачу тварини. Покажи мені її і скажи ще раз.")
+        }
+    }
+
     /** Вітання без слів: радісний звук і очі; говорить Спіді лише у відповідь. */
-    private suspend fun greetArrival(kind: Kind) {
+    private suspend fun greetArrival(kind: Kind, petName: String? = null) {
         when (kind) {
             Kind.PERSON -> {
                 face.setMood(Mood.HAPPY)
@@ -211,6 +233,17 @@ class Assistant(
             Kind.CAT, Kind.DOG -> {
                 face.setMood(Mood.SURPRISED)
                 chirps.play(Chirp.CURIOUS)
+                face.setMood(Mood.HAPPY)
+                if (petName != null) {
+                    say(listOf("Ой, $petName!", "$petName, привіт!", "О, $petName тут!").random())
+                } else if (pets != null) {
+                    say(if (kind == Kind.CAT) "Ой, котик! Як його звати?" else "Ой, песик! Як його звати?")
+                    face.setMood(Mood.LISTENING)
+                    awaitingPetName = true
+                    awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
+                } else {
+                    say(if (kind == Kind.CAT) "Ой, котик!" else "Ой, песик!")
+                }
             }
         }
     }
@@ -234,6 +267,15 @@ class Assistant(
     private fun onHeard(candidates: List<String>) {
         if (busy) return
         val inWindow = SystemClock.uptimeMillis() < awaitingCommandUntil
+        if (awaitingPetName && inWindow && WakeWord.extractCommand(candidates) == null) {
+            val name = candidates.firstNotNullOfOrNull { LocalCommands.parsePetName(it) ?: LocalCommands.parseName(it, answer = true) }
+            if (name != null) {
+                awaitingCommandUntil = 0
+                awaitingPetName = false
+                runBusy { namePet(name) }
+                return
+            }
+        }
         if (awaitingName && inWindow && WakeWord.extractCommand(candidates) == null) {
             val name = candidates.firstNotNullOfOrNull { LocalCommands.parseName(it, answer = true) }
             if (name != null) {
@@ -243,7 +285,10 @@ class Assistant(
                 return
             }
         }
-        if (!inWindow) awaitingName = false
+        if (!inWindow) {
+            awaitingName = false
+            awaitingPetName = false
+        }
         val command = WakeWord.extractCommand(candidates)
             ?: candidates.firstOrNull()?.takeIf { inWindow }
             ?: return
@@ -299,6 +344,22 @@ class Assistant(
             LocalCommand.FIND_ROBOT -> return findPlatform()
             LocalCommand.CHECK_UPDATE -> return checkUpdates(install = false)
             LocalCommand.INSTALL_UPDATE -> return checkUpdates(install = true)
+            LocalCommand.CORRECT_NAME -> {
+                val (wrong, right) = LocalCommands.parseCorrection(command) ?: return say("Не розчула. Скажи ще раз?")
+                val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
+                if (!p.reassign(right, SystemClock.uptimeMillis())) {
+                    face.setMood(Mood.THINKING)
+                    return say("Подивись на мене, щоб я побачила обличчя, і скажи ще раз.")
+                }
+                Log.i(TAG, "виправлено: не $wrong, а $right")
+                face.setMood(Mood.HAPPY)
+                chirps.play(Chirp.HAPPY)
+                return say("Ой, вибач! Привіт, $right. Тепер не сплутаю.")
+            }
+            LocalCommand.NAME_PET -> {
+                val name = LocalCommands.parsePetName(command) ?: return say("Не розчула кличку. Скажи ще раз?")
+                return namePet(name)
+            }
             LocalCommand.INTRODUCE -> {
                 val name = LocalCommands.parseName(command) ?: return say("Не розчула ім'я. Скажи ще раз?")
                 return introduce(name)

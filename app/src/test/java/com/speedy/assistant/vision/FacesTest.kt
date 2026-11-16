@@ -82,6 +82,32 @@ class FacesTest {
     }
 
     @Test
+    fun misrecognizedPersonKeepsOtherFace() {
+        val book = FaceBook(null).apply { remember("Костя", listOf(adult)) }
+        val people = People(book)
+        // Ніну (схожа, але не та сама) сплутали з Костею.
+        val other = vec(0.75f, 0.66f, 0f)
+        val face = FaceObservation(other, 0.1f)
+        people.update(0, listOf(face))
+        assertEquals(listOf(PresenceEvent.Recognized("Костя")), people.update(1500, listOf(face)))
+        assertTrue(people.reassign("Ніна", 2000))
+        assertEquals("Ніна", book.match(other)?.first)
+        assertEquals("Костя", book.match(adult)?.first) // Костя лишився собою
+    }
+
+    @Test
+    fun jokeNameDisappearsAfterCorrection() {
+        val book = FaceBook(null).apply { remember("Бетмен", listOf(adult)) }
+        val people = People(book)
+        val face = FaceObservation(adultAgain, 0.1f)
+        people.update(0, listOf(face))
+        people.update(1500, listOf(face))
+        assertTrue(people.reassign("Тарас", 2000))
+        assertEquals("Тарас", book.match(adult)?.first)
+        assertTrue("Бетмен" !in book.names)
+    }
+
+    @Test
     fun namesFromPhrases() {
         assertEquals(LocalCommand.INTRODUCE, LocalCommands.match("мене звати Тарас"))
         assertEquals("Тарас", LocalCommands.parseName("Мене звати Тарас"))
@@ -93,8 +119,10 @@ class FacesTest {
         assertEquals("Тарас", LocalCommands.parseName("насправді мене звати Тарас"))
         assertEquals("Тарас", LocalCommands.parseName("називай мене Тарас"))
         assertEquals("Тарас", LocalCommands.parseName("моє справжнє ім'я Тарас"))
-        assertEquals("Тарас", LocalCommands.parseName("я не Бетмен, я Тарас"))
-        assertEquals("Тарас", LocalCommands.parseName("я не Бетмен а я Тарас"))
+        assertEquals("Бетмен" to "Тарас", LocalCommands.parseCorrection("я не Бетмен, я Тарас"))
+        assertEquals("Костя" to "Ніна", LocalCommands.parseCorrection("Це не Костя, це Ніна"))
+        assertEquals("Костя" to "Ніна", LocalCommands.parseCorrection("мене звати не Костя а Ніна"))
+        assertEquals(LocalCommand.CORRECT_NAME, LocalCommands.match("це не Костя це Ніна"))
         assertEquals(LocalCommand.INTRODUCE, LocalCommands.match("називай мене Тарас"))
         assertEquals(LocalCommand.WHO_AM_I, LocalCommands.match("Як мене звати?"))
         assertEquals(LocalCommand.FORGET_ME, LocalCommands.match("забудь мене"))

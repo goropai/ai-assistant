@@ -23,7 +23,17 @@ class FaceIdTracker(
         private set
     private var strangerSeenAt = Long.MIN_VALUE / 2
 
+    /** Відбитки облич з останніх кадрів (найбільше обличчя) — для виправлення імені. */
+    private val recentFaces = ArrayDeque<Pair<Long, FloatArray>>()
+
+    fun recentFaces(now: Long, maxAgeMs: Long = 30_000): List<FloatArray> =
+        recentFaces.filter { now - it.first <= maxAgeMs }.map { it.second }
+
     fun update(now: Long, faces: List<FaceObservation>): List<PresenceEvent> {
+        faces.maxByOrNull { it.area }?.let {
+            recentFaces.addLast(now to it.embedding)
+            while (recentFaces.size > MAX_SAMPLES) recentFaces.removeFirst()
+        }
         val events = mutableListOf<PresenceEvent>()
         val seenNames = mutableSetOf<String>()
         var stranger: FaceObservation? = null

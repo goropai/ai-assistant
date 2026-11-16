@@ -43,6 +43,26 @@ class FaceBook(private val file: File?) {
         return true
     }
 
+    /**
+     * Обличчя [current] насправді — [name]. Зразки інших імен, дуже схожі на це обличчя,
+     * переходять до [name] (жартівливе ім'я тієї самої людини зникає), а зразки іншої людини,
+     * з якою просто сплутали, лишаються їй.
+     */
+    fun reassign(name: String, current: List<FloatArray>) {
+        if (current.isEmpty()) return
+        val target = people.getOrPut(name) { mutableListOf() }
+        for ((other, samples) in people.entries.toList()) {
+            if (other == name) continue
+            val moved = samples.filter { s -> current.any { cosine(it, s) >= SAME_PERSON } }
+            samples.removeAll(moved)
+            target += moved
+            if (samples.isEmpty()) people.remove(other)
+        }
+        target += current.map { normalize(it) }
+        while (target.size > MAX_SAMPLES) target.removeAt(0)
+        save()
+    }
+
     fun forget(name: String): Boolean = (people.remove(name) != null).also { if (it) save() }
 
     private fun load() {
@@ -75,6 +95,8 @@ class FaceBook(private val file: File?) {
         /** Косинус 0.6 ≈ квадрат відстані 0.8 між нормованими векторами (поріг авторів моделі). */
         const val MATCH_THRESHOLD = 0.6f
         const val MAX_SAMPLES = 8
+        /** Так схожі зразки — майже напевно та сама людина (поріг упізнавання — 0.6). */
+        const val SAME_PERSON = 0.8f
 
         fun normalize(v: FloatArray): FloatArray {
             val norm = sqrt(v.fold(0f) { acc, x -> acc + x * x }).coerceAtLeast(1e-10f)

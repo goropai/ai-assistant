@@ -121,7 +121,8 @@ class MainActivity : AppCompatActivity() {
         val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
         speaker = voice
         val people = People(FaceBook(java.io.File(filesDir, "faces.json")))
-        presence = PresenceWatcher(this, this, people) { events -> assistant?.onPresence(events) }
+        val pets = com.speedy.assistant.vision.Pets(java.io.File(filesDir, "pets.json"))
+        presence = PresenceWatcher(this, this, people, pets) { events -> assistant?.onPresence(events) }
 
         assistant = Assistant(
             scope = lifecycleScope,
@@ -135,6 +136,7 @@ class MainActivity : AppCompatActivity() {
             chirps = ChirpPlayer(),
             battery = { batteryPercent to charging },
             people = people,
+            pets = pets,
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
             earsFactory = { onPhrase ->
