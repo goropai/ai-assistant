@@ -34,8 +34,9 @@ android {
         versionCode = 6
         versionName = "0.5.1"
 
-        // Нативні бібліотеки TensorFlow Lite лише для ARM — менший APK.
-        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+        // Нативні бібліотеки (TensorFlow Lite, ML Kit) лише 32-бітні ARM: телефон Спіді — armeabi-v7a,
+        // а 64-бітні ARM-телефони їх теж запускають. Мінус ~12 МБ у кожному оновленні.
+        ndk { abiFilters += listOf("armeabi-v7a") }
 
         buildConfigField("String", "CLAUDE_MODEL", quoted(prop("claude.model", "claude-sonnet-5-5")))
         buildConfigField("String", "CLAUDE_EFFORT", quoted(prop("claude.effort", "low")))
@@ -79,6 +80,11 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    packaging {
+        // Стиснені .so в APK — менше трафіку при самооновленні (на 7.1 вони однаково розпаковуються).
+        jniLibs.useLegacyPackaging = true
+    }
+
     androidResources {
         // Модель має читатися з APK напряму (memory-map), без стиснення.
         noCompress += "tflite"
@@ -113,6 +119,8 @@ dependencies {
     // Локальне розпізнавання присутності (EfficientDet-Lite0 у assets).
     // Лише Interpreter: нативна бібліотека Task Library не завантажується на Android 7.1.
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    // Пошук облич у кадрі (модель вбудована в APK, працює офлайн); відбитки — MobileFaceNet у assets.
+    implementation("com.google.mlkit:face-detection:16.1.7")
 
     testImplementation("junit:junit:4.13.2")
     // Справжній org.json для JVM-тестів (в android.jar лише заглушки).

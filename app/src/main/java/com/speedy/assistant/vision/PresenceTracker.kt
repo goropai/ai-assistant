@@ -23,6 +23,12 @@ sealed interface PresenceEvent {
 
     /** Усі пішли. */
     data object Lost : PresenceEvent
+
+    /** Впізнала знайоме обличчя. */
+    data class Recognized(val name: String) : PresenceEvent
+
+    /** Поруч незнайоме обличчя — можна спитати ім'я. */
+    data object Stranger : PresenceEvent
 }
 
 /**

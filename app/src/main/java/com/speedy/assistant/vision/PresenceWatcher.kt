@@ -28,6 +28,8 @@ import java.util.concurrent.Executors
 class PresenceWatcher(
     private val context: Context,
     private val owner: LifecycleOwner,
+    /** Пам'ять облич; null — розпізнавання облич вимкнено. */
+    private val people: People? = null,
     private val onEvents: (List<PresenceEvent>) -> Unit,
 ) {
     private val executor = Executors.newSingleThreadExecutor()
@@ -36,6 +38,8 @@ class PresenceWatcher(
     private var provider: ProcessCameraProvider? = null
     private var analysis: ImageAnalysis? = null
     private var detector: CocoDetector? = null
+    private var faces: FaceRecognizer? = null
+    private var facesBroken = false
     private var lastRun = 0L
     /** Прив'язка камери асинхронна: між start() і готовністю провайдера могли викликати stop(). */
     private var wanted = false
@@ -86,7 +90,10 @@ class PresenceWatcher(
 
     fun release() {
         stop()
-        executor.execute { detector?.close(); detector = null }
+        executor.execute {
+            detector?.close(); detector = null
+            faces?.close(); faces = null
+        }
         executor.shutdown()
     }
 
@@ -108,8 +115,20 @@ class PresenceWatcher(
                     area = (d.right - d.left) * (d.bottom - d.top),
                 )
             }
-            val events = tracker.update(now, sightings)
-            summary = tracker.summary()
+            val events = tracker.update(now, sightings).toMutableList()
+            if (people != null && sightings.any { s -> s.kind == Kind.PERSON }) {
+                faceRecognizer()?.let { recognizer ->
+                    val observed = try {
+                        recognizer.recognize(frame)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "face recognition failed", e)
+                        emptyList()
+                    }
+                    events += people.update(now, observed)
+                }
+            }
+            val names = people?.presentNames(now).orEmpty()
+            summary = (names + tracker.summary()).filter { s -> s.isNotBlank() }.joinToString(", ")
             if (events.isNotEmpty()) main.post { onEvents(events) }
         }
     }
@@ -123,6 +142,18 @@ class PresenceWatcher(
             Log.e(TAG, "detector init failed, presence disabled", e)
             broken = true
             main.post { stop() }
+            null
+        }
+    }
+
+    private fun faceRecognizer(): FaceRecognizer? {
+        if (facesBroken) return null
+        faces?.let { return it }
+        return try {
+            FaceRecognizer(context).also { faces = it }
+        } catch (e: Throwable) {
+            Log.e(TAG, "face recognizer init failed, faces disabled", e)
+            facesBroken = true
             null
         }
     }

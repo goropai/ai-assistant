@@ -15,6 +15,7 @@ import com.speedy.assistant.update.UpdateInfo
 import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
 import com.speedy.assistant.vision.Kind
+import com.speedy.assistant.vision.People
 import com.speedy.assistant.vision.PresenceEvent
 import com.speedy.assistant.voice.Chirp
 import com.speedy.assistant.voice.ChirpPlayer
@@ -44,6 +45,7 @@ class Assistant(
     private val chirps: ChirpPlayer,
     /** Заряд у відсотках (-1 — невідомо) і чи заряджається. */
     private val battery: () -> Pair<Int, Boolean> = { -1 to false },
+    private val people: People? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -51,6 +53,8 @@ class Assistant(
     private val ears = earsFactory(::onHeard)
     private var busy = false
     private var awaitingCommandUntil = 0L
+    /** Спитала "як тебе звати?" — наступна фраза, ймовірно, ім'я. */
+    private var awaitingName = false
     private var idleJob: Job? = null
     private var commandJob: Job? = null
     private val desires = Desires()
@@ -121,6 +125,13 @@ class Assistant(
     /** Події від локальної моделі присутності. */
     fun onPresence(events: List<PresenceEvent>) {
         if (busy) return
+        // Обличчя важливіші за загальне "хтось прийшов": вітаємо на ім'я або знайомимось.
+        events.firstOrNull { it is PresenceEvent.Recognized || it is PresenceEvent.Stranger }?.let { event ->
+            runBusy {
+                if (event is PresenceEvent.Recognized) greetKnown(event.name) else askName()
+            }
+            return
+        }
         for (event in events) {
             when (event) {
                 is PresenceEvent.Look -> face.lookAt(event.x, event.y)
@@ -129,7 +140,41 @@ class Assistant(
                     return
                 }
                 PresenceEvent.Lost -> face.lookAt(0f, 0f)
+                is PresenceEvent.Recognized, PresenceEvent.Stranger -> {} // оброблено вище
             }
+        }
+    }
+
+    private suspend fun greetKnown(name: String) {
+        face.setMood(Mood.HAPPY)
+        chirps.play(Chirp.HAPPY)
+        say(listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random())
+        face.setMood(Mood.LISTENING)
+        awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
+    }
+
+    private suspend fun askName() {
+        face.setMood(Mood.SURPRISED)
+        chirps.play(Chirp.CURIOUS)
+        face.setMood(Mood.HAPPY)
+        say("Привіт! Я Спіді. А як тебе звати?")
+        face.setMood(Mood.LISTENING)
+        awaitingName = true
+        awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
+    }
+
+    private suspend fun introduce(name: String) {
+        awaitingName = false
+        val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
+        if (p.introduce(name, SystemClock.uptimeMillis())) {
+            face.setMood(Mood.HAPPY)
+            chirps.play(Chirp.HAPPY)
+            say("Приємно познайомитись, $name! Я тебе запам'ятала.")
+        } else {
+            val known = p.presentNames(SystemClock.uptimeMillis())
+            face.setMood(Mood.THINKING)
+            if (known.isNotEmpty()) say("Але ж я тебе знаю — ти ${known.first()}. Якщо помилилась, скажи «забудь мене».")
+            else say("Подивись на мене, щоб я побачила твоє обличчя, і скажи ще раз.")
         }
     }
 
@@ -168,8 +213,19 @@ class Assistant(
 
     private fun onHeard(candidates: List<String>) {
         if (busy) return
+        val inWindow = SystemClock.uptimeMillis() < awaitingCommandUntil
+        if (awaitingName && inWindow && WakeWord.extractCommand(candidates) == null) {
+            val name = candidates.firstNotNullOfOrNull { LocalCommands.parseName(it, answer = true) }
+            if (name != null) {
+                awaitingCommandUntil = 0
+                lastInteraction = SystemClock.uptimeMillis()
+                runBusy { introduce(name) }
+                return
+            }
+        }
+        if (!inWindow) awaitingName = false
         val command = WakeWord.extractCommand(candidates)
-            ?: candidates.firstOrNull()?.takeIf { SystemClock.uptimeMillis() < awaitingCommandUntil }
+            ?: candidates.firstOrNull()?.takeIf { inWindow }
             ?: return
         awaitingCommandUntil = 0
         lastInteraction = SystemClock.uptimeMillis()
@@ -222,6 +278,25 @@ class Assistant(
             LocalCommand.FIND_ROBOT -> return findPlatform()
             LocalCommand.CHECK_UPDATE -> return checkUpdates(install = false)
             LocalCommand.INSTALL_UPDATE -> return checkUpdates(install = true)
+            LocalCommand.INTRODUCE -> {
+                val name = LocalCommands.parseName(command) ?: return say("Не розчула ім'я. Скажи ще раз?")
+                return introduce(name)
+            }
+            LocalCommand.FORGET_ME -> {
+                val name = people?.presentNames(SystemClock.uptimeMillis())?.firstOrNull()
+                    ?: return say("Я не бачу, кого забути. Подивись на мене.")
+                people.forget(name)
+                face.setMood(Mood.SAD)
+                return say("Добре, я забула тебе, $name.")
+            }
+            LocalCommand.WHO_AM_I -> {
+                val name = people?.presentNames(SystemClock.uptimeMillis())?.firstOrNull()
+                if (name != null) {
+                    face.setMood(Mood.HAPPY)
+                    return say("Ти — $name!")
+                }
+                return askName()
+            }
             LocalCommand.TIME -> {
                 face.setMood(Mood.HAPPY)
                 return say("Зараз ${java.text.SimpleDateFormat("H:mm", java.util.Locale("uk", "UA")).format(java.util.Date())}.")

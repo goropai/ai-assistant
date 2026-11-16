@@ -28,6 +28,8 @@ import com.speedy.assistant.settings.AppSettings
 import com.speedy.assistant.settings.SettingsDialog
 import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
+import com.speedy.assistant.vision.FaceBook
+import com.speedy.assistant.vision.People
 import com.speedy.assistant.vision.PresenceWatcher
 import com.speedy.assistant.voice.Chirp
 import com.speedy.assistant.voice.ChirpPlayer
@@ -107,7 +109,8 @@ class MainActivity : AppCompatActivity() {
         if (assistant != null) return
         val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
         speaker = voice
-        presence = PresenceWatcher(this, this) { events -> assistant?.onPresence(events) }
+        val people = People(FaceBook(java.io.File(filesDir, "faces.json")))
+        presence = PresenceWatcher(this, this, people) { events -> assistant?.onPresence(events) }
 
         assistant = Assistant(
             scope = lifecycleScope,
@@ -120,6 +123,7 @@ class MainActivity : AppCompatActivity() {
             updater = UpdateManager(this, http, BuildConfig.UPDATE_MANIFEST_URL, BuildConfig.VERSION_CODE),
             chirps = ChirpPlayer(),
             battery = { batteryPercent to charging },
+            people = people,
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
