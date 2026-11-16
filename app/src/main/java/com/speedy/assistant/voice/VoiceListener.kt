@@ -33,6 +33,8 @@ class VoiceListener(
     private val language: String = "uk-UA",
     private val onPhrase: (List<String>) -> Unit,
     private val onFatalError: (String) -> Unit,
+    /** Хтось заговорив — можна заздалегідь відкрити з'єднання з "мозком". */
+    private val onVoice: () -> Unit = {},
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -149,6 +151,7 @@ class VoiceListener(
         guard = null
         Log.d(TAG, "голос — вмикаю розпізнавання")
         startSession()
+        onVoice()
     }
 
     // --- сеанс розпізнавання ---

@@ -6,7 +6,11 @@ package com.speedy.assistant.brain
  * для конкретного ключа — назви не вшиті в код і не застаріють.
  * Стан живе між запитами: модель, що "відпочиває", пропускаємо; остання, що відповіла, — перша.
  */
-class GeminiModels {
+class GeminiModels(
+    /** Збережений стан (остання робоча модель, хто відпочиває) — переживає перезапуск. */
+    private val load: () -> String? = { null },
+    private val save: (String) -> Unit = {},
+) {
     enum class Failure(val cooldownMs: Long) {
         /** 429: вичерпано квоту моделі. */
         RATE_LIMIT(10 * 60_000L),
@@ -23,6 +27,26 @@ class GeminiModels {
     var listedAt = Long.MIN_VALUE / 2
         private set
 
+    init {
+        try {
+            load()?.let { org.json.JSONObject(it) }?.let { json ->
+                lastGood = json.optString("lastGood").ifBlank { null }
+                json.optJSONObject("resting")?.let { r -> r.keys().forEach { resting[it] = r.getLong(it) } }
+            }
+        } catch (e: Exception) {
+            // зіпсований стан — почнемо з чистого
+        }
+    }
+
+    private fun persist() {
+        save(
+            org.json.JSONObject()
+                .put("lastGood", lastGood.orEmpty())
+                .put("resting", org.json.JSONObject(resting.mapValues { it.value }))
+                .toString()
+        )
+    }
+
     @Synchronized
     fun setAvailable(models: List<String>, now: Long) {
         available = models.filter(::suitable)
@@ -33,7 +57,8 @@ class GeminiModels {
     @Synchronized
     fun order(configured: String, now: Long, max: Int = 4): List<String> {
         val preferred = available.sortedBy(::rank)
-        return (listOfNotNull(configured, lastGood) + preferred)
+        // Остання модель, що відповіла, — першою: налаштована могла зависати чи зникнути.
+        return (listOfNotNull(lastGood, configured) + preferred)
             .distinct()
             .filter { (resting[it] ?: Long.MIN_VALUE) <= now }
             .ifEmpty { listOf(configured) } // усі відпочивають — пробуємо налаштовану
@@ -44,12 +69,15 @@ class GeminiModels {
     fun failed(model: String, failure: Failure, now: Long) {
         resting[model] = now + failure.cooldownMs
         if (lastGood == model) lastGood = null
+        persist()
     }
 
     @Synchronized
     fun succeeded(model: String) {
+        val changed = lastGood != model || resting.containsKey(model)
         resting.remove(model)
         lastGood = model
+        if (changed) persist()
     }
 
     companion object {

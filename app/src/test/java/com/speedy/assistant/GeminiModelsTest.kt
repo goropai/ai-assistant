@@ -55,4 +55,16 @@ class GeminiModelsTest {
         m.failed("gemini-2.5-flash", Failure.UNAVAILABLE, now = 0)
         assertEquals(listOf("gemini-2.5-flash"), m.order("gemini-2.5-flash", now = 1000))
     }
+
+    @Test
+    fun lastWorkingModelSurvivesRestart() {
+        var stored: String? = null
+        val first = GeminiModels(load = { stored }, save = { stored = it }).apply { setAvailable(listed, 0) }
+        first.failed("gemini-2.5-flash", Failure.NOT_FOUND, now = 0)
+        first.succeeded("gemini-2.5-flash-lite")
+        val second = GeminiModels(load = { stored }, save = { stored = it }).apply { setAvailable(listed, 0) }
+        val order = second.order("gemini-2.5-flash", now = 1000)
+        assertEquals("gemini-2.5-flash-lite", order.first())
+        assertFalse("gemini-2.5-flash" in order)
+    }
 }

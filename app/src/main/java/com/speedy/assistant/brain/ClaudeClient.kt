@@ -28,9 +28,12 @@ class ClaudeClient(
     private val effort: String,
 ) : LlmClient {
 
-    override suspend fun complete(system: String, history: List<Turn>): String = withContext(Dispatchers.IO) {
+    override suspend fun complete(system: String, history: List<Turn>): String = stream(system, history) {}
+
+    override suspend fun stream(system: String, history: List<Turn>, onDelta: (String) -> Unit): String = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("model", model)
+            .put("stream", true)
             .put("max_tokens", MAX_TOKENS)
             .put(
                 "system", JSONArray().put(
@@ -62,25 +65,77 @@ class ClaudeClient(
             .build()
 
         http.newCall(request).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw LlmException("Claude HTTP ${response.code}: ${text.take(300)}")
-
-            val json = JSONObject(text)
-            if (json.optString("stop_reason") == "refusal") throw LlmException("Claude refusal")
-            json.optJSONObject("usage")?.let { u ->
+            if (!response.isSuccessful) {
+                val text = response.body?.string().orEmpty()
+                throw LlmException("Claude HTTP ${response.code}: ${text.take(300)}")
+            }
+            // Server-sent events: message_start (usage), content_block_delta (text_delta — текст;
+            // thinking-дельти пропускаємо), message_delta (stop_reason, output usage), error.
+            val source = response.body?.source() ?: throw LlmException("Claude: порожня відповідь")
+            val full = StringBuilder()
+            var inputUsage: JSONObject? = null
+            var outputTokens = 0
+            while (true) {
+                val line = source.readUtf8Line() ?: break
+                if (!line.startsWith("data:")) continue
+                val event = JSONObject(line.removePrefix("data:").trim())
+                when (event.optString("type")) {
+                    "message_start" -> inputUsage = event.optJSONObject("message")?.optJSONObject("usage")
+                    "content_block_delta" -> {
+                        val delta = event.optJSONObject("delta") ?: continue
+                        if (delta.optString("type") == "text_delta") {
+                            val text = delta.optString("text")
+                            full.append(text)
+                            onDelta(text)
+                        }
+                    }
+                    "message_delta" -> {
+                        if (event.optJSONObject("delta")?.optString("stop_reason") == "refusal") throw LlmException("Claude refusal")
+                        outputTokens = event.optJSONObject("usage")?.optInt("output_tokens") ?: outputTokens
+                    }
+                    "error" -> throw LlmException("Claude stream error: ${event.optJSONObject("error")?.optString("message")}")
+                }
+            }
+            inputUsage?.let { u ->
                 Log.d(
                     TAG, "tokens: in=${u.optInt("input_tokens")} cache_read=${u.optInt("cache_read_input_tokens")} " +
-                        "cache_write=${u.optInt("cache_creation_input_tokens")} out=${u.optInt("output_tokens")}"
+                        "cache_write=${u.optInt("cache_creation_input_tokens")} out=$outputTokens"
                 )
             }
+            if (full.isEmpty()) throw LlmException("Claude: порожня відповідь")
+            full.toString()
+        }
+    }
 
-            // Відповідь може містити блоки thinking — беремо тільки текст.
-            val content = json.optJSONArray("content") ?: JSONArray()
-            val texts = (0 until content.length())
-                .map { content.getJSONObject(it) }
-                .filter { it.optString("type") == "text" }
-                .map { it.optString("text") }
-            texts.lastOrNull() ?: throw LlmException("Claude: порожня відповідь")
+    /** Вбудований веб-пошук Claude (серверний інструмент): звичайний текст, без JSON-формату. */
+    override suspend fun search(query: String): String? = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("model", model)
+            .put("max_tokens", 1024)
+            .put("output_config", JSONObject().put("effort", "low"))
+            .put("tools", JSONArray().put(JSONObject().put("type", "web_search_20260209").put("name", "web_search").put("max_uses", 3)))
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", searchPrompt(query))))
+        val request = Request.Builder()
+            .url("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        try {
+            http.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "search HTTP ${response.code}: ${text.take(200)}")
+                    return@use null
+                }
+                val content = JSONObject(text).optJSONArray("content") ?: return@use null
+                (0 until content.length()).map { content.getJSONObject(it) }
+                    .filter { it.optString("type") == "text" }
+                    .joinToString("") { it.optString("text") }.trim().ifBlank { null }
+            }
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "search: ${e.message}")
+            null
         }
     }
 

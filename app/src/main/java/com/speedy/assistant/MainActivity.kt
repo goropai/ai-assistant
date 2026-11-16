@@ -70,6 +70,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val llm by lazy { ConfiguredLlm(http, settings) }
+    private val memory by lazy { com.speedy.assistant.brain.Memory(java.io.File(filesDir, "memory.json")) }
+    private val wikipedia by lazy { com.speedy.assistant.brain.Wikipedia(http) }
+
+    private var warmedAt = 0L
+
+    /**
+     * Хтось заговорив: поки людина договорює й працює розпізнавання, відкриваємо з'єднання
+     * з "мозком" (TLS на слабкому телефоні — помітна частина секунди). З'єднання живе ~5 хв.
+     */
+    private fun warmBrain() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - warmedAt < 60_000) return
+        warmedAt = now
+        checkBrain()
+    }
 
     /** Індикатор зв'язку з "мозком": перевірка без токенів (список моделей). */
     private fun checkBrain() {
@@ -108,6 +123,8 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA,
             // Не обов'язковий: без нього погода лише за назвою міста.
             Manifest.permission.ACCESS_FINE_LOCATION,
+            // Теж не обов'язкові: контакти й календар — лише для питань про них.
+            Manifest.permission.READ_CONTACTS, Manifest.permission.READ_CALENDAR,
         )
         if (needed.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             initAssistant()
@@ -128,7 +145,7 @@ class MainActivity : AppCompatActivity() {
             scope = lifecycleScope,
             face = face,
             voice = voice,
-            brain = Brain(llm, presence = { presence?.summary.orEmpty() }),
+            brain = Brain(llm, presence = { presence?.summary.orEmpty() }, memory = { memory.all() }),
             camera = CameraSnapshot(this, this),
             robot = robot,
             findRobot = { robot.rediscover() },
@@ -137,10 +154,16 @@ class MainActivity : AppCompatActivity() {
             battery = { batteryPercent to charging },
             people = people,
             pets = pets,
+            webSearch = { query ->
+                llm.search(query) ?: wikipedia.summary(query)?.let { "(Довідка з Вікіпедії — свіжих новин, цін і курсів тут немає.) $it" }
+            },
+            memory = memory,
+            phone = com.speedy.assistant.phone.PhoneActions(this),
+            currency = com.speedy.assistant.weather.Currency(http),
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
             earsFactory = { onPhrase ->
-                VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }).also {
+                VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
                 }
             },

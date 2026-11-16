@@ -21,12 +21,23 @@ class Brain(
     private val now: () -> Long = { SystemClock.elapsedRealtime() },
     /** Що Спіді зараз бачить поруч (локальна модель) — додається до кожного запиту. */
     private val presence: () -> String = { "" },
+    /** Факти з довготривалої пам'яті — додаються до системного промпту. */
+    private val memory: () -> List<String> = { emptyList() },
 ) {
     private val history = ArrayList<Turn>()
     private var lastAsk = Long.MIN_VALUE / 2
     private val clock = SimpleDateFormat("HH:mm, EEEE d MMMM", Locale("uk", "UA"))
 
-    suspend fun ask(text: String, image: ByteArray? = null): AgentReply {
+    /**
+     * @param onSentence якщо задано — відповідь потокова: готові речення "say" віддаються одразу,
+     *   а в результаті say порожній (уже сказано). [onMood] — настрій, щойно він відомий.
+     */
+    suspend fun ask(
+        text: String,
+        image: ByteArray? = null,
+        onMood: (String) -> Unit = {},
+        onSentence: ((String) -> Unit)? = null,
+    ): AgentReply {
         if (now() - lastAsk > conversationGapMs) history.clear()
         lastAsk = now()
         val parts = buildList {
@@ -35,18 +46,28 @@ class Brain(
             add(Part.Text("[${clock.format(Date())}]$nearby $text"))
         }
         history += Turn(Role.USER, parts)
+        val stream = onSentence?.let { SayStream(onMood, it) }
         val raw = try {
-            llm.complete(SYSTEM_PROMPT, history)
+            val system = systemPrompt()
+            if (stream == null) llm.complete(system, history)
+            else llm.stream(system, history) { stream.append(it) }
         } catch (e: Exception) {
             history.removeAt(history.lastIndex)
             throw e
         }
         history += Turn(Role.ASSISTANT, listOf(Part.Text(raw)))
         trim()
-        return AgentReply.parse(raw)
+        val reply = AgentReply.parse(raw)
+        return if (stream?.spokeAnything == true) reply.copy(say = "") else reply
     }
 
     fun reset() = history.clear()
+
+    private fun systemPrompt(): String {
+        val facts = memory()
+        if (facts.isEmpty()) return SYSTEM_PROMPT
+        return SYSTEM_PROMPT + "\n\nЩо ти пам'ятаєш (з попередніх розмов):\n" + facts.joinToString("\n") { "- $it" }
+    }
 
     /** Задовга розмова: лишаємо новішу половину (парами "користувач — Спіді"). */
     private fun trim() {
@@ -60,6 +81,12 @@ class Brain(
 
     companion object {
         const val MAX_NAV_STEPS = 8
+
+        const val MAX_SEARCHES = 2
+
+        fun searchFollowUp(query: String, result: String?) =
+            if (result == null) "[система] Пошук \"$query\" не вдався. Чесно скажи, що не змогла знайти, і відповідай з того, що знаєш."
+            else "[система] Результат пошуку \"$query\":\n$result\nВідповідай на попереднє питання коротко, своїми словами, голосом."
 
         fun cameraFollowUp(camera: String) =
             "[система] Ось кадр із ${if (camera == "backward") "задньої камери" else "камери спереду (з боку твоїх очей)"}. " +
@@ -76,8 +103,13 @@ class Brain(
         val SYSTEM_PROMPT = """
             Ти — Спіді, маленька весела робот-помічниця з характером дівчинки-підлітка: доброзичлива,
             допитлива, трохи грайлива. Живеш у смартфоні, на екрані якого видно лише твої очі.
-            Розмовляєш українською. Тебе чують голосом, тому відповідай коротко — 1–3 речення,
-            без списків, markdown, емодзі та посилань. Відповідай одразу, без довгих роздумів.
+            Розмовляєш українською. Тебе чують голосом, тому відповідай коротко — зазвичай 1–3 речення,
+            без списків, markdown, емодзі та посилань; довше — лише коли просять розповісти.
+            Відповідай одразу, без довгих роздумів.
+
+            Будь гарною співрозмовницею: звертайся до людей на ім'я (хто поруч — у [поруч: …]),
+            памʼятай, про що говорили, інколи постав коротке зустрічне питання, жартуй доречно,
+            не повторюй ту саму фразу двічі. Якщо не знаєш — так і скажи або пошукай.
 
             Тіло: смартфон може стояти на колісній платформі екраном уперед, тож "вперед" — це
             туди, куди дивляться твої очі. Спереду на платформі є датчик відстані: вона сама
@@ -93,14 +125,22 @@ class Brain(
               короткими кроками (вперед 300–1000 мс, повороти 200–500 мс), щоразу дивлячись. Кроків
               не більше $MAX_NAV_STEPS. Коли мети досягнуто, її не видно або шлях закритий — then_look=false
               і скажи про це. Якщо платформа не підключена, рух не відбудеться.
+            - "search": пошукати в інтернеті (поле query — короткий пошуковий запит). Використовуй для
+              новин, курсів валют, розкладів, результатів матчів, свіжих фактів і всього, чого не знаєш
+              напевно. Отримаєш результат і відповіси ще раз. "say" — дуже коротко ("Зараз гляну!").
             - "stop": негайно зупинитись.
             - "none": просто відповісти.
 
+            Поле "remember": якщо дізналась щось варте памʼяті надовго (імʼя, вподобання, важливу дату,
+            хто кому ким доводиться) — коротко запиши факт ("Тарас любить каву"), інакше порожній рядок.
+
             Відповідай ЛИШЕ JSON-об'єктом такого вигляду:
-            {"say": "що промовити", "mood": "neutral|happy|sad|angry|surprised|sleepy|thinking|listening",
-             "action": {"type": "none|look|move|stop", "camera": "none|forward|backward",
-                        "direction": "none|forward|backward|left|right", "duration_ms": 0, "then_look": false}}
-            Для "look" і проміжних кроків руху поле "say" — дуже коротке ("Гляну!", "Ще трохи…") або порожнє.
+            {"mood": "neutral|happy|sad|angry|surprised|sleepy|thinking|listening", "say": "що промовити",
+             "action": {"type": "none|look|move|stop|search", "camera": "none|forward|backward",
+                        "direction": "none|forward|backward|left|right", "duration_ms": 0, "then_look": false,
+                        "query": ""},
+             "remember": ""}
+            Для "look", "search" і проміжних кроків руху поле "say" — дуже коротке ("Гляну!", "Ще трохи…") або порожнє.
             Настрій (mood) обирай відповідно до змісту — він відображається твоїми очима.
         """.trimIndent()
     }

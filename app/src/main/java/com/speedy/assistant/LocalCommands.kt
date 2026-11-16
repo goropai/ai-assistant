@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { END_CONVERSATION, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -71,6 +71,12 @@ object LocalCommands {
         return wrong.replaceFirstChar { it.uppercase() } to right.replaceFirstChar { it.uppercase() }
     }
 
+    // Кінець розмови: "дякую, все", "бувай", "на сьогодні все", "можеш відпочити"
+    private val endConversation = Regex(
+        "^(?:(?:дякую|спасибі|дякс)(?:\\s+(?:все|тобі|це\\s+все|більше\\s+нічого))*|все\\s+дякую|бувай|па-па|па|до\\s+побачення|" +
+            "на\\s+сьогодні\\s+все|це\\s+все|більше\\s+нічого|можеш\\s+відпочити|відпочивай)$",
+    )
+
     fun parseName(phrase: String, answer: Boolean = false): String? {
         val text = normalize(phrase)
         val word = introduce.find(text)?.groupValues?.get(2)
@@ -91,6 +97,7 @@ object LocalCommands {
     fun match(command: String): LocalCommand? {
         val text = normalize(command)
         return when {
+            endConversation.matches(text) -> LocalCommand.END_CONVERSATION
             text in stop -> LocalCommand.STOP
             findRobot.containsMatchIn(text) -> LocalCommand.FIND_ROBOT
             installUpdate.containsMatchIn(text) -> LocalCommand.INSTALL_UPDATE

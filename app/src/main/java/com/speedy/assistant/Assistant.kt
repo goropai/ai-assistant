@@ -26,6 +26,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -47,6 +49,11 @@ class Assistant(
     private val battery: () -> Pair<Int, Boolean> = { -1 to false },
     private val people: People? = null,
     private val pets: com.speedy.assistant.vision.Pets? = null,
+    /** Пошук в інтернеті: модель (Google / Claude web search), запасний — Вікіпедія. */
+    private val webSearch: (suspend (String) -> String?)? = null,
+    private val memory: com.speedy.assistant.brain.Memory? = null,
+    private val phone: com.speedy.assistant.phone.PhoneActions? = null,
+    private val currency: com.speedy.assistant.weather.Currency? = null,
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
@@ -56,6 +63,8 @@ class Assistant(
     private val ears = earsFactory(::onHeard)
     private var busy = false
     private var awaitingCommandUntil = 0L
+    /** Розмова триває: "Спіді" потрібне лише на початку, далі — просто говорити. */
+    private var inConversation = false
     /** Спитала "як тебе звати?" — наступна фраза, ймовірно, ім'я. */
     private var awaitingName = false
     /** Спитала "як його звати?" про тварину — наступна фраза, ймовірно, кличка. */
@@ -288,12 +297,14 @@ class Assistant(
         if (!inWindow) {
             awaitingName = false
             awaitingPetName = false
+            inConversation = false
         }
         val command = WakeWord.extractCommand(candidates)
             ?: candidates.firstOrNull()?.takeIf { inWindow }
             ?: return
         awaitingCommandUntil = 0
         lastInteraction = SystemClock.uptimeMillis()
+        inConversation = true
         runBusy { if (command.isBlank()) greet() else handle(command) }
     }
 
@@ -318,6 +329,11 @@ class Assistant(
                 face.setSpeaking(false)
                 busy = false
                 onBusyChanged(false)
+                // Розмова триває — наступну репліку можна казати без "Спіді".
+                if (inConversation) {
+                    awaitingCommandUntil = maxOf(awaitingCommandUntil, SystemClock.uptimeMillis() + CONVERSATION_WINDOW_MS)
+                    face.setMood(Mood.LISTENING)
+                }
                 // Спитала й чекає відповіді — слухаємо одразу, щоб не обрізати початок фрази.
                 ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
                 scheduleIdle()
@@ -342,6 +358,12 @@ class Assistant(
                 return
             }
             LocalCommand.FIND_ROBOT -> return findPlatform()
+            LocalCommand.END_CONVERSATION -> {
+                inConversation = false
+                awaitingCommandUntil = 0
+                face.setMood(Mood.HAPPY)
+                return say(listOf("Звертайся!", "Гаразд, кличи, якщо що.", "Добре, я тут.").random())
+            }
             LocalCommand.CHECK_UPDATE -> return checkUpdates(install = false)
             LocalCommand.INSTALL_UPDATE -> return checkUpdates(install = true)
             LocalCommand.CORRECT_NAME -> {
@@ -393,22 +415,43 @@ class Assistant(
             }
             null -> {}
         }
+        // Дії на телефоні — без моделі; якщо не вийшло (нема такого застосунку) — далі до моделі.
+        com.speedy.assistant.phone.PhoneCommands.parse(command)?.let { if (handlePhone(it)) return }
+        com.speedy.assistant.weather.Currency.parse(command)?.let { code -> if (tellRate(code)) return }
 
         face.setMood(Mood.THINKING)
-        var reply = askBrain { brain.ask(command) }
+        var reply = ask(command)
         var looks = 0
         var steps = 0
+        var searches = 0
 
         // Агентний цикл: модель може подивитись, поїхати й знову подивитись, поки не досягне мети.
         while (true) {
             val action = reply.action
+            if (reply.remember.isNotBlank() && memory?.add(reply.remember) == true) Log.i(TAG, "запам'ятала: ${reply.remember}")
             when (action.type) {
+                "search" -> {
+                    if (searches++ >= Brain.MAX_SEARCHES || action.query.isBlank() || webSearch == null) return speak(reply)
+                    if (reply.say.isNotBlank()) speak(reply)
+                    face.setMood(Mood.THINKING)
+                    val started = SystemClock.uptimeMillis()
+                    val found = try {
+                        webSearch.invoke(action.query)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "search failed", e)
+                        null
+                    }
+                    Log.i(TAG, "пошук \"${action.query}\": ${if (found == null) "нічого" else "${found.length} симв."} за ${SystemClock.uptimeMillis() - started} мс")
+                    reply = ask(Brain.searchFollowUp(action.query, found))
+                }
                 "look" -> {
                     if (looks++ >= MAX_LOOKS) return speak(reply)
                     if (reply.say.isNotBlank()) speak(reply)
                     face.setMood(Mood.THINKING)
                     val jpeg = photo(action.camera) ?: return
-                    reply = askBrain { brain.ask(Brain.cameraFollowUp(action.camera), jpeg) }
+                    reply = ask(Brain.cameraFollowUp(action.camera), jpeg)
                 }
                 "move" -> {
                     val direction = Direction.parse(action.direction) ?: return speak(reply)
@@ -442,7 +485,7 @@ class Assistant(
                         status?.last == "obstacle" -> "зупинилась раніше перед перешкодою"
                         else -> "виконано"
                     }
-                    reply = askBrain { brain.ask(Brain.navFollowUp(action.direction, ms, outcome, status?.distanceCm, steps), jpeg) }
+                    reply = ask(Brain.navFollowUp(action.direction, ms, outcome, status?.distanceCm, steps), jpeg)
                 }
                 "stop" -> {
                     robot.stop()
@@ -451,6 +494,87 @@ class Assistant(
                 else -> return speak(reply)
             }
         }
+    }
+
+    /** @return false — не впоралась локально, хай відповідає модель. */
+    private suspend fun handlePhone(cmd: com.speedy.assistant.phone.PhoneCommand): Boolean {
+        val p = phone ?: return false
+        Log.i(TAG, "телефон: $cmd")
+        when (cmd) {
+            is com.speedy.assistant.phone.PhoneCommand.OpenApp -> {
+                val label = p.openApp(cmd.name) ?: return false
+                face.setMood(Mood.HAPPY)
+                say("Відкриваю $label.")
+            }
+            is com.speedy.assistant.phone.PhoneCommand.Alarm -> {
+                val time = "%d:%02d".format(cmd.hour, cmd.minute)
+                if (p.setAlarm(cmd.hour, cmd.minute)) { face.setMood(Mood.HAPPY); say("Будильник на $time поставила.") }
+                else { face.setMood(Mood.SAD); say("Не вийшло поставити будильник.") }
+            }
+            is com.speedy.assistant.phone.PhoneCommand.Timer -> {
+                val text = when {
+                    cmd.seconds % 3600 == 0 -> "${cmd.seconds / 3600} год"
+                    cmd.seconds % 60 == 0 -> "${cmd.seconds / 60} хв"
+                    else -> "${cmd.seconds} с"
+                }
+                if (p.setTimer(cmd.seconds)) { face.setMood(Mood.HAPPY); say("Таймер на $text запустила.") }
+                else { face.setMood(Mood.SAD); say("Не вийшло запустити таймер.") }
+            }
+            is com.speedy.assistant.phone.PhoneCommand.ContactNumber -> {
+                val found = p.findContacts(cmd.name)
+                when {
+                    found == null -> say("Дозволь мені читати контакти в налаштуваннях телефона.")
+                    found.isEmpty() -> say("Не знайшла ${cmd.name} у контактах.")
+                    else -> {
+                        face.setMood(Mood.HAPPY)
+                        say(found.take(2).joinToString(". ") { "${it.name}: ${spellNumber(it.number)}" } + ".")
+                    }
+                }
+            }
+            is com.speedy.assistant.phone.PhoneCommand.Call -> {
+                val contact = p.findContacts(cmd.name)
+                when {
+                    contact == null -> say("Дозволь мені читати контакти в налаштуваннях телефона.")
+                    contact.isEmpty() -> say("Не знайшла ${cmd.name} у контактах.")
+                    else -> {
+                        face.setMood(Mood.HAPPY)
+                        say("Набираю ${contact.first().name}. Натисни виклик.")
+                        p.dial(contact.first().number)
+                    }
+                }
+            }
+            com.speedy.assistant.phone.PhoneCommand.TodayCalendar -> {
+                val events = p.todayEvents()
+                when {
+                    events == null -> say("Дозволь мені читати календар у налаштуваннях телефона.")
+                    events.isEmpty() -> say("Сьогодні в календарі нічого немає.")
+                    else -> { face.setMood(Mood.HAPPY); say("Сьогодні: ${events.joinToString("; ")}.") }
+                }
+            }
+        }
+        return true
+    }
+
+    /** Курс НБУ без моделі. false — не вдалось (хай відповідає модель із пошуком). */
+    private suspend fun tellRate(code: String): Boolean {
+        val c = currency ?: return false
+        val (rate, date) = try {
+            c.rate(code) ?: return false
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "НБУ: ${e.message}")
+            return false
+        }
+        val name = mapOf("USD" to "долар", "EUR" to "євро", "PLN" to "злотий", "GBP" to "фунт").getOrDefault(code, code)
+        face.setMood(Mood.HAPPY)
+        say("Курс НБУ на ${date.substringBeforeLast('.')}: $name — ${com.speedy.assistant.weather.Currency.spoken(rate)}.")
+        return true
+    }
+
+    /** "+380671234567" → "плюс 380 671 234 567" — щоб синтезатор читав групами, а не мільярдами. */
+    private fun spellNumber(number: String): String {
+        val digits = number.filter { it.isDigit() }
+        val plus = if (number.trim().startsWith("+")) "плюс " else ""
+        return plus + digits.chunked(if (digits.length > 10) 3 else 2).joinToString(" ")
     }
 
     /** Погода без моделі: місто з фрази або там, де Спіді (GPS / мережа), прогноз — Open-Meteo. */
@@ -486,6 +610,37 @@ class Assistant(
         val name = loc.placeName(here)
         face.setMood(Mood.HAPPY)
         say(name?.let { "Ми тут: $it." } ?: "Мої координати: %.3f, %.3f.".format(here.latitude, here.longitude))
+    }
+
+    /**
+     * Потоковий запит: кожне готове речення відповіді одразу йде в мовлення, поки модель
+     * дописує решту; настрій — щойно відомий. У лог — затримка до першого слова й загальна.
+     */
+    private suspend fun ask(text: String, image: ByteArray? = null): AgentReply = coroutineScope {
+        val started = SystemClock.uptimeMillis()
+        var firstWord = 0L
+        val sentences = Channel<String>(Channel.UNLIMITED)
+        val speaking = launch {
+            for (sentence in sentences) {
+                if (firstWord == 0L) firstWord = SystemClock.uptimeMillis()
+                say(sentence)
+            }
+        }
+        val reply = try {
+            askBrain {
+                brain.ask(
+                    text, image,
+                    onMood = { mood -> launch { face.setMood(Mood.parse(mood)) } },
+                    onSentence = { sentences.trySend(it) },
+                )
+            }
+        } finally {
+            sentences.close()
+        }
+        val answered = SystemClock.uptimeMillis()
+        speaking.join()
+        Log.i(TAG, "затримка: перше слово ${if (firstWord > 0) firstWord - started else -1} мс, відповідь ${answered - started} мс")
+        reply
     }
 
     /** Запит до "мозку" з оновленням індикатора зв'язку на екрані. */
@@ -590,7 +745,9 @@ class Assistant(
     private fun scheduleIdle() {
         idleJob?.cancel()
         idleJob = scope.launch {
-            delay(if (face.mood == Mood.LISTENING) FOLLOW_UP_WINDOW_MS else 5_000)
+            val listening = (awaitingCommandUntil - SystemClock.uptimeMillis()).coerceAtLeast(0)
+            delay(if (face.mood == Mood.LISTENING) maxOf(listening, 1_000) else 5_000)
+            inConversation = false
             face.setMood(Mood.NEUTRAL)
             delay(SLEEP_AFTER_MS)
             face.setMood(Mood.SLEEPY)
@@ -600,6 +757,8 @@ class Assistant(
     private companion object {
         const val TAG = "Assistant"
         const val FOLLOW_UP_WINDOW_MS = 8_000L
+        /** Скільки після відповіді чекати наступної репліки без "Спіді". */
+        const val CONVERSATION_WINDOW_MS = 20_000L
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 3
         const val SETTLE_MS = 300L

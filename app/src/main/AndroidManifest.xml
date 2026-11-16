@@ -8,6 +8,10 @@
     <!-- Погода й "де ми": GPS і мережеве визначення місця -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- "Який номер у Кості?", "що в мене сьогодні в календарі?", будильник і таймер -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- Самооновлення: потрібен на Android 8+, на 7.1 діє глобальне "Невідомі джерела" -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 

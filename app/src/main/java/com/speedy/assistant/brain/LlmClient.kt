@@ -20,6 +20,18 @@ enum class BrainStatus { UNKNOWN, OK, DOWN, NO_KEY }
 interface LlmClient {
     suspend fun complete(system: String, history: List<Turn>): String
 
+    /** Те саме, але текст віддається шматками в [onDelta] по мірі генерації. */
+    suspend fun stream(system: String, history: List<Turn>, onDelta: (String) -> Unit): String =
+        complete(system, history).also(onDelta)
+
+    /** Пошук в інтернеті засобами моделі; коротка текстова відповідь або null (не вміє / не вдалось). */
+    suspend fun search(query: String): String? = null
+
     /** Перевірка зв'язку без витрати токенів (список моделей). true — сервіс відповідає. */
     suspend fun ping(): Boolean = true
 }
+
+/** Завдання для пошукового запиту: коротко, фактами, українською — далі це читає основна модель. */
+fun searchPrompt(query: String) =
+    "Знайди в інтернеті актуальну відповідь на запит: \"$query\". " +
+        "Відповідай українською, 3–6 речень, лише факти: цифри, дати, імена, джерело. Без вступів."

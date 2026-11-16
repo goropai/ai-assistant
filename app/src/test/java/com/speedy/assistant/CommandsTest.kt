@@ -37,6 +37,14 @@ class CommandsTest {
     }
 
     @Test
+    fun endOfConversation() {
+        listOf("дякую", "Дякую, все", "бувай", "на сьогодні все", "все, дякую", "можеш відпочити").forEach {
+            assertEquals(it, LocalCommand.END_CONVERSATION, LocalCommands.match(it))
+        }
+        assertEquals(null, LocalCommands.match("дякую, а розкажи ще про котів"))
+    }
+
+    @Test
     fun wakeWordAtEnd() {
         assertEquals("А хто це там сидить", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("А хто це там сидить, Спіді")))
         assertEquals("котра година", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("Спіді, котра година")))

@@ -22,6 +22,11 @@ class AppSettings(context: Context) {
         get() = prefs.getString("claude_model", null)?.takeIf { it.isNotBlank() } ?: BuildConfig.CLAUDE_MODEL
         set(value) = prefs.edit().putString("claude_model", value.trim()).apply()
 
+    /** Стан перебору моделей Gemini (JSON) — щоб не перебирати все наново після перезапуску. */
+    var geminiState: String?
+        get() = prefs.getString("gemini_state", null)
+        set(value) = prefs.edit().putString("gemini_state", value).apply()
+
     var geminiKey: String
         get() = prefs.getString("gemini_key", null).orEmpty()
         set(value) = prefs.edit().putString("gemini_key", value.trim()).apply()
