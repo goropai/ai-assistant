@@ -56,6 +56,9 @@ class Assistant(
     private val currency: com.speedy.assistant.weather.Currency? = null,
     private val profiles: com.speedy.assistant.people.Profiles? = null,
     private val reminders: com.speedy.assistant.initiative.Reminders? = null,
+    private val english: com.speedy.assistant.english.EnglishCourse? = null,
+    /** Чи є інтернет (англійський розпізнавач — онлайн). */
+    private val isOnline: () -> Boolean = { true },
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
@@ -285,6 +288,8 @@ class Assistant(
     }
 
     private fun onHeard(candidates: List<String>) {
+        // Йде урок і Спіді чекає відповіді — це вона.
+        lessonAnswer?.let { if (it.complete(candidates)) return }
         if (busy) return
         val inWindow = SystemClock.uptimeMillis() < awaitingCommandUntil
         if (awaitingPetName && inWindow && WakeWord.extractCommand(candidates) == null) {
@@ -369,6 +374,19 @@ class Assistant(
                 return
             }
             LocalCommand.FIND_ROBOT -> return findPlatform()
+            LocalCommand.ENGLISH_LESSON -> return englishLesson()
+            LocalCommand.ENGLISH_PROGRESS -> {
+                val name = partner() ?: "гість"
+                return say(english?.describe(name) ?: "Я поки не вмію вчити англійської.")
+            }
+            LocalCommand.ENGLISH_LEVEL -> {
+                val level = com.speedy.assistant.english.Level.fromSpoken(command.substringAfter("англійськ"))
+                    ?: return say("Скажи рівень: малюк, початківець, середній чи впевнений.")
+                val course = english ?: return say("Я поки не вмію вчити англійської.")
+                course.progress.setLevel(partner() ?: "гість", level)
+                face.setMood(Mood.HAPPY)
+                return say("Добре, тепер твій рівень англійської — ${level.ua}.")
+            }
             LocalCommand.REMIND -> {
                 val r = com.speedy.assistant.initiative.ReminderParser.parse(command, System.currentTimeMillis())
                     ?: return say("Не зрозуміла, коли нагадати. Скажи, наприклад: «нагадай о шостій вечора» або «через двадцять хвилин».")
@@ -627,6 +645,48 @@ class Assistant(
         if (parts.isEmpty()) return
         face.setMood(Mood.HAPPY)
         say(parts.joinToString(" "))
+    }
+
+    private var lessonAnswer: kotlinx.coroutines.CompletableDeferred<List<String>>? = null
+
+    /** Урок англійської: учень — той, кого Спіді бачить (рівень і прогрес у кожного свої). */
+    private suspend fun englishLesson() {
+        val course = english ?: return say("Я поки не вмію вчити англійської.")
+        if (!isOnline()) return say("Для уроку англійської потрібен інтернет: англійську я чую через Google.")
+        val name = partner() ?: "гість"
+        Log.i(TAG, "урок англійської: $name")
+        inConversation = false
+        val io = object : com.speedy.assistant.english.LessonIO {
+            override suspend fun say(uk: String) = this@Assistant.say(uk)
+            override suspend fun sayEnglish(en: String) {
+                face.setSpeaking(true)
+                try { voice.speak(en, english = true) } finally { face.setSpeaking(false) }
+            }
+            override suspend fun listen(english: Boolean) = listenLesson(english)
+            override suspend fun cheer() { face.setMood(Mood.HAPPY); chirps.play(Chirp.HAPPY) }
+            override suspend fun oops() { face.setMood(Mood.THINKING) }
+        }
+        com.speedy.assistant.english.EnglishLesson(
+            course.vocabulary, course.curriculum, course.progress, io, name,
+            now = { System.currentTimeMillis() }, extra = course.store, generate = course.generate,
+        ).run()
+        face.setMood(Mood.HAPPY)
+    }
+
+    /** Відповідь на уроці: слухаємо одразу (без "Спіді") потрібною мовою, до 9 с. */
+    private suspend fun listenLesson(english: Boolean): com.speedy.assistant.english.Heard? {
+        val answer = kotlinx.coroutines.CompletableDeferred<List<String>>()
+        lessonAnswer = answer
+        ears.language = if (english) "en-US" else "uk-UA"
+        face.setMood(Mood.LISTENING)
+        ears.start(listenNow = true)
+        val texts = kotlinx.coroutines.withTimeoutOrNull(LESSON_LISTEN_MS) { answer.await() }
+        lessonAnswer = null
+        ears.stop()
+        ears.language = "uk-UA"
+        delay(VoiceListener.UNMUTE_DELAY_MS) // звук ще приглушений після розпізнавача
+        Log.d(TAG, "урок почув (${if (english) "en" else "uk"}): $texts, впевненість ${ears.lastConfidence}")
+        return texts?.let { com.speedy.assistant.english.Heard(it, ears.lastConfidence) }
     }
 
     /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */
@@ -903,6 +963,7 @@ class Assistant(
         const val FOLLOW_UP_WINDOW_MS = 8_000L
         /** Скільки після відповіді чекати наступної репліки без "Спіді". */
         const val CONVERSATION_WINDOW_MS = 20_000L
+        const val LESSON_LISTEN_MS = 9_000L
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 3
         const val SETTLE_MS = 300L

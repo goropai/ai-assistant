@@ -178,6 +178,35 @@ class GeminiClient(
         null
     }
 
+    override suspend fun generateJson(system: String, prompt: String): String? = withContext(Dispatchers.IO) {
+        refreshModelList()
+        for (candidate in models.order(model, now(), max = 4)) {
+            val generation = JSONObject().put("responseMimeType", "application/json")
+            if (GeminiModels.canDisableThinking(candidate)) generation.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
+            val body = JSONObject()
+                .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
+                .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+                .put("generationConfig", generation)
+            val request = Request.Builder().url("$BASE/models/$candidate:generateContent")
+                .header("x-goog-api-key", apiKey).post(body.toString().toRequestBody(JSON)).build()
+            try {
+                searchHttp.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "generateJson $candidate HTTP ${response.code}")
+                        return@use null
+                    }
+                    val parts = JSONObject(text).optJSONArray("candidates")?.optJSONObject(0)
+                        ?.optJSONObject("content")?.optJSONArray("parts") ?: return@use null
+                    (0 until parts.length()).joinToString("") { parts.getJSONObject(it).optString("text") }.ifBlank { null }
+                }?.let { return@withContext it }
+            } catch (e: IOException) {
+                Log.w(TAG, "generateJson $candidate: ${e.message}")
+            }
+        }
+        null
+    }
+
     override suspend fun ping(): Boolean = withContext(Dispatchers.IO) {
         try {
             fallbackHttp.newCall(Request.Builder().url("$BASE/models?pageSize=1").header("x-goog-api-key", apiKey).build())

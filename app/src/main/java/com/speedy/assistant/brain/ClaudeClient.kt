@@ -139,6 +139,33 @@ class ClaudeClient(
         }
     }
 
+    override suspend fun generateJson(system: String, prompt: String): String? = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("model", model)
+            .put("max_tokens", 2048)
+            .put("system", system)
+            .put("output_config", JSONObject().put("effort", "low"))
+            .apply { if (effort in NO_THINKING_EFFORTS) put("thinking", JSONObject().put("type", "between_tools")) }
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", prompt)))
+        val request = Request.Builder()
+            .url("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .post(body.toString().toRequestBody(JSON))
+            .build()
+        try {
+            http.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) return@use null
+                val content = JSONObject(text).optJSONArray("content") ?: return@use null
+                (0 until content.length()).map { content.getJSONObject(it) }
+                    .filter { it.optString("type") == "text" }.joinToString("") { it.optString("text") }.ifBlank { null }
+            }
+        } catch (e: java.io.IOException) {
+            null
+        }
+    }
+
     override suspend fun ping(): Boolean = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url("https://api.anthropic.com/v1/models?limit=1")

@@ -69,6 +69,7 @@ class Speaker(
         val voices = tts.voices.orEmpty().filter { it.locale.language == "uk" }
         Log.i(TAG, "Доступні голоси: ${voices.map { it.name }}")
         voices.firstOrNull { it.name == preferredVoice }?.let { tts.voice = it }
+        ukrainianVoice = tts.voice
 
         tts.setPitch(pitch)
         tts.setSpeechRate(rate)
@@ -86,8 +87,26 @@ class Speaker(
     }
 
     /** Промовляє текст і повертається, коли мовлення завершилось. */
-    suspend fun speak(text: String) {
+    private var ukrainianVoice: android.speech.tts.Voice? = null
+
+    /** @param english — англійським голосом (уроки англійської), потім назад український. */
+    suspend fun speak(text: String, english: Boolean = false) {
         if (text.isBlank() || !ready.await()) return
+        if (english) {
+            val r = tts.setLanguage(Locale.US)
+            if (r < TextToSpeech.LANG_AVAILABLE) Log.w(TAG, "Англійська недоступна в синтезаторі ($r)")
+        }
+        try {
+            speakNow(text)
+        } finally {
+            if (english) {
+                tts.setLanguage(Locale("uk", "UA"))
+                ukrainianVoice?.let { tts.voice = it }
+            }
+        }
+    }
+
+    private suspend fun speakNow(text: String) {
         val id = UUID.randomUUID().toString()
         val done = CompletableDeferred<Unit>()
         pending[id] = done

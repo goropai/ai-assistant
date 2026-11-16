@@ -71,6 +71,12 @@ class MainActivity : AppCompatActivity() {
 
     private val llm by lazy { ConfiguredLlm(http, settings) }
     private val offlineEar by lazy { com.speedy.assistant.voice.OfflineEar(this) }
+    private val englishCourse by lazy {
+        com.speedy.assistant.english.EnglishCourse(
+            context = this,
+            generateJson = { system, prompt -> llm.generateJson(system, prompt) },
+        )
+    }
     private val reminders by lazy { com.speedy.assistant.initiative.Reminders(java.io.File(filesDir, "reminders.json")) }
     private val memory by lazy { com.speedy.assistant.brain.Memory(java.io.File(filesDir, "memory.json")) }
     private val wikipedia by lazy { com.speedy.assistant.brain.Wikipedia(http) }
@@ -181,6 +187,8 @@ class MainActivity : AppCompatActivity() {
             currency = com.speedy.assistant.weather.Currency(http),
             profiles = profiles,
             reminders = reminders,
+            english = englishCourse,
+            isOnline = { !networkLost && connectivity.activeNetwork != null },
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
             earsFactory = { onPhrase ->

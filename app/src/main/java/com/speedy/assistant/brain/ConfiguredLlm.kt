@@ -22,6 +22,8 @@ class ConfiguredLlm(
 
     override suspend fun search(query: String): String? = client()?.search(query)
 
+    override suspend fun generateJson(system: String, prompt: String): String? = client()?.generateJson(system, prompt)
+
     /** Стан зв'язку без витрати токенів. */
     suspend fun status(): BrainStatus {
         val client = client() ?: return BrainStatus.NO_KEY

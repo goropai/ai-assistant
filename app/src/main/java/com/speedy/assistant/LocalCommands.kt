@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -99,6 +99,10 @@ object LocalCommands {
             "на\\s+сьогодні\\s+все|це\\s+все|більше\\s+нічого|можеш\\s+відпочити|відпочивай)$",
     )
 
+    private val englishLesson = Regex("(?:урок|заняття)\\s+англійськ|(?:вчити|вчимо|повчимо|позаймаємося|займемося|потренуємо|потренуймо)\\s+англійськ|англійськ\\p{L}*\\s+(?:урок|заняття)")
+    private val englishProgress = Regex("(?:прогрес|успіхи)\\s+(?:в|з|у)\\s+англійськ|як\\s+(?:в\\s+мене|у\\s+мене|я)\\s+(?:з|в|у)\\s+англійськ")
+    private val englishLevel = Regex("рівень\\s+(?:з\\s+)?англійськ")
+
     private val remind = Regex("^нагадай\\s")
     private val listReminders = Regex("^(?:які|що)\\s+(?:в\\s+мене\\s+|у\\s+мене\\s+)?(?:є\\s+)?нагадуван\\p{L}*|^мої\\s+нагадуван\\p{L}*")
     private val cancelReminders = Regex("^(?:скасуй|видали|забудь|очисти)\\s+(?:всі\\s+|усі\\s+)?нагадуван\\p{L}*")
@@ -123,6 +127,9 @@ object LocalCommands {
     fun match(command: String): LocalCommand? {
         val text = normalize(command)
         return when {
+            englishLevel.containsMatchIn(text) && com.speedy.assistant.english.Level.fromSpoken(text.substringAfter("англійськ")) != null -> LocalCommand.ENGLISH_LEVEL
+            englishProgress.containsMatchIn(text) -> LocalCommand.ENGLISH_PROGRESS
+            englishLesson.containsMatchIn(text) -> LocalCommand.ENGLISH_LESSON
             endConversation.matches(text) -> LocalCommand.END_CONVERSATION
             remind.containsMatchIn(text) -> LocalCommand.REMIND
             listReminders.containsMatchIn(text) -> LocalCommand.LIST_REMINDERS

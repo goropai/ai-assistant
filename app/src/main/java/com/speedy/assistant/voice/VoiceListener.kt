@@ -30,7 +30,8 @@ import android.util.Log
  */
 class VoiceListener(
     private val context: Context,
-    private val language: String = "uk-UA",
+    /** Мова розпізнавання (на уроці англійської — "en-US"). */
+    var language: String = "uk-UA",
     private val onPhrase: (List<String>) -> Unit,
     private val onFatalError: (String) -> Unit,
     /** Хтось заговорив — можна заздалегідь відкрити з'єднання з "мозком". */
@@ -44,6 +45,10 @@ class VoiceListener(
     private val useOffline: () -> Boolean = { true },
 ) {
     private val handler = Handler(Looper.getMainLooper())
+
+    /** Упевненість останнього розпізнавання (0..1) або null — розпізнавач не дав. */
+    var lastConfidence: Float? = null
+        private set
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val prefs = context.getSharedPreferences("voice", Context.MODE_PRIVATE)
     private var muted = false
@@ -287,6 +292,8 @@ class VoiceListener(
         override fun onResults(results: Bundle?) {
             offlineFailures = 0
             val phrases = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+            // Упевненість розпізнавача в першому варіанті — "вухо" для оцінки вимови.
+            lastConfidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull()
             Log.d(TAG, "heard: $phrases")
             if (phrases.isNotEmpty()) sessionUntil = SystemClock.uptimeMillis() + SESSION_MS
             // onPhrase може викликати stop() — тоді перезапуску не буде.

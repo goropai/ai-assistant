@@ -24,6 +24,9 @@ interface LlmClient {
     suspend fun stream(system: String, history: List<Turn>, onDelta: (String) -> Unit): String =
         complete(system, history).also(onDelta)
 
+    /** Довільний JSON за інструкцією (теми уроків тощо); null — не вміє / не вдалось. */
+    suspend fun generateJson(system: String, prompt: String): String? = null
+
     /** Пошук в інтернеті засобами моделі; коротка текстова відповідь або null (не вміє / не вдалось). */
     suspend fun search(query: String): String? = null
 

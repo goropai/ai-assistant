@@ -37,6 +37,16 @@ class CommandsTest {
     }
 
     @Test
+    fun englishCommands() {
+        listOf("проведи урок англійської", "давай вчити англійську", "займемося англійською", "англійська урок").forEach {
+            assertEquals(it, LocalCommand.ENGLISH_LESSON, LocalCommands.match(it))
+        }
+        assertEquals(LocalCommand.ENGLISH_PROGRESS, LocalCommands.match("як мій прогрес в англійській?"))
+        assertEquals(LocalCommand.ENGLISH_LEVEL, LocalCommands.match("мій рівень англійської — середній"))
+        assertEquals(LocalCommand.ENGLISH_LEVEL, LocalCommands.match("постав рівень англійської малюк"))
+    }
+
+        @Test
     fun endOfConversation() {
         listOf("дякую", "Дякую, все", "бувай", "на сьогодні все", "все, дякую", "можеш відпочити").forEach {
             assertEquals(it, LocalCommand.END_CONVERSATION, LocalCommands.match(it))
