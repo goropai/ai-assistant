@@ -38,6 +38,20 @@ class BrainTest {
     }
 
     @Test
+    fun childMarkedInRequest() = runBlocking {
+        val llm = FakeLlm()
+        var kid = true
+        val brain = Brain(llm, now = { 0L }, child = { kid })
+        brain.ask("подивись мій малюнок")
+        kid = false
+        brain.ask("а тепер?")
+        val texts = llm.calls.last().filter { it.role == com.speedy.assistant.brain.Role.USER }
+            .map { (it.parts.last() as Part.Text).text }
+        assertTrue(texts[0].contains("[співрозмовник — дитина]"))
+        assertTrue(!texts[1].contains("дитина"))
+    }
+
+        @Test
     fun pauseStartsNewConversation() = runBlocking {
         val llm = FakeLlm()
         var t = 0L

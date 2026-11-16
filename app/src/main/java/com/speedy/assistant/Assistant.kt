@@ -743,6 +743,14 @@ class Assistant(
     }
 
     /** Свіжий тон голосу каже "дитина"? (для уроку, коли людина ще незнайома) */
+    /** Чи говорить зараз дитина: профіль того, хто говорить, інакше — голос щойно почутої фрази. */
+    fun childSpeaking(): Boolean {
+        val age = partner()?.let { profiles?.age(it) }
+        if (age == com.speedy.assistant.people.Profiles.Age.CHILD) return true
+        if (age == com.speedy.assistant.people.Profiles.Age.ADULT) return false
+        return voiceSaysChild() == true
+    }
+
     private fun voiceSaysChild(): Boolean? {
         val hz = ears.lastPitchHz?.takeIf { SystemClock.uptimeMillis() - ears.lastPitchAt < 15_000 } ?: return null
         return when {

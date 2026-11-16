@@ -168,9 +168,11 @@ class MainActivity : AppCompatActivity() {
                 memory = { memory.all() },
                 scene = { presence?.scene.orEmpty() },
                 about = {
-                    people.presentNames(android.os.SystemClock.uptimeMillis()).singleOrNull()
+                    // Довідка — про того, хто говорить (найближче обличчя), а не про будь-кого в кадрі.
+                    people.speaker(android.os.SystemClock.uptimeMillis())
                         ?.let { profiles.summary(it, System.currentTimeMillis()) }.orEmpty()
                 },
+                child = { assistant?.childSpeaking() == true },
             ),
             camera = CameraSnapshot(this, this),
             robot = robot,
