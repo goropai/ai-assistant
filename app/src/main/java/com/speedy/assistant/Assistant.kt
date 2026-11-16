@@ -173,10 +173,28 @@ class Assistant(
             chirps.play(Chirp.HAPPY)
             say("Приємно познайомитись, $name! Я тебе запам'ятала.")
         } else {
-            val known = p.presentNames(SystemClock.uptimeMillis())
-            face.setMood(Mood.THINKING)
-            if (known.isNotEmpty()) say("Але ж я тебе знаю — ти ${known.first()}. Якщо помилилась, скажи «забудь мене».")
-            else say("Подивись на мене, щоб я побачила твоє обличчя, і скажи ще раз.")
+            val now = SystemClock.uptimeMillis()
+            val known = p.presentNames(now)
+            when {
+                known.size == 1 && known.first() == name -> {
+                    face.setMood(Mood.HAPPY)
+                    say("Так, я знаю, ти $name!")
+                }
+                // Назвався жартома, а тепер каже справжнє ім'я — обличчя те саме, міняємо ім'я.
+                known.size == 1 && p.rename(known.first(), name, now) -> {
+                    face.setMood(Mood.HAPPY)
+                    chirps.play(Chirp.HAPPY)
+                    say("Добре, тепер я знаю, що ти $name, а не ${known.first()}.")
+                }
+                known.size > 1 -> {
+                    face.setMood(Mood.THINKING)
+                    say("Тут кілька людей, які я знаю. Нехай лишиться в кадрі той, хто представляється, і скажи ще раз.")
+                }
+                else -> {
+                    face.setMood(Mood.THINKING)
+                    say("Подивись на мене, щоб я побачила твоє обличчя, і скажи ще раз.")
+                }
+            }
         }
     }
 

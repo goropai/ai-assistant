@@ -62,6 +62,14 @@ class FaceIdTracker(
     fun recentStranger(now: Long, maxAgeMs: Long = 60_000): List<FloatArray> =
         if (now - strangerSeenAt <= maxAgeMs) strangerSamples else emptyList()
 
+    /** Після перейменування: людина вже поруч і привітана — без повторного "Привіт, …". */
+    fun renamed(old: String, new: String, now: Long) {
+        lastSeen.remove(old)?.let { lastSeen[new] = it }
+        streak.remove(old)?.let { streak[new] = it }
+        lastEvent.remove(old)
+        lastEvent[new] = now
+    }
+
     fun clearStranger() {
         strangerSamples = emptyList()
         strangerStreak = 0

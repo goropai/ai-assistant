@@ -62,6 +62,26 @@ class FacesTest {
     }
 
     @Test
+    fun jokeNameCanBeCorrected() {
+        val file = File(tmp.root, "faces.json")
+        val people = People(FaceBook(file))
+        val face = FaceObservation(child, 0.1f)
+        people.update(0, listOf(face))
+        people.update(1500, listOf(face))
+        assertTrue(people.introduce("Бетмен", 2000))
+        people.update(3000, listOf(face))
+        people.update(4500, listOf(face))
+        assertEquals(listOf("Бетмен"), people.presentNames(4500))
+
+        assertTrue(people.rename("Бетмен", "Валя", 5000))
+        assertEquals(listOf("Валя"), people.presentNames(5000))
+        // Те саме обличчя тепер — Валя, і після перезапуску теж; повторно не вітаємо.
+        assertTrue(people.update(6000, listOf(face)).isEmpty())
+        assertEquals("Валя", FaceBook(file).match(child)?.first)
+        assertNull(FaceBook(file).match(child)?.takeIf { it.first == "Бетмен" })
+    }
+
+    @Test
     fun namesFromPhrases() {
         assertEquals(LocalCommand.INTRODUCE, LocalCommands.match("мене звати Тарас"))
         assertEquals("Тарас", LocalCommands.parseName("Мене звати Тарас"))
@@ -70,6 +90,12 @@ class FacesTest {
         assertEquals("Валя", LocalCommands.parseName("я Валя", answer = true))
         assertNull(LocalCommands.parseName("не скажу", answer = true))
         assertNull(LocalCommands.parseName("розкажи мені щось цікаве про космос", answer = true))
+        assertEquals("Тарас", LocalCommands.parseName("насправді мене звати Тарас"))
+        assertEquals("Тарас", LocalCommands.parseName("називай мене Тарас"))
+        assertEquals("Тарас", LocalCommands.parseName("моє справжнє ім'я Тарас"))
+        assertEquals("Тарас", LocalCommands.parseName("я не Бетмен, я Тарас"))
+        assertEquals("Тарас", LocalCommands.parseName("я не Бетмен а я Тарас"))
+        assertEquals(LocalCommand.INTRODUCE, LocalCommands.match("називай мене Тарас"))
         assertEquals(LocalCommand.WHO_AM_I, LocalCommands.match("Як мене звати?"))
         assertEquals(LocalCommand.FORGET_ME, LocalCommands.match("забудь мене"))
     }

@@ -26,4 +26,10 @@ class People(private val book: FaceBook) {
 
     @Synchronized
     fun forget(name: String): Boolean = book.forget(name)
+
+    /** Знайомий, що зараз поруч, назвався інакше — міняємо ім'я, обличчя лишаються. */
+    @Synchronized
+    fun rename(old: String, new: String, now: Long): Boolean = book.rename(old, new).also {
+        if (it) tracker.renamed(old, new, now)
+    }
 }

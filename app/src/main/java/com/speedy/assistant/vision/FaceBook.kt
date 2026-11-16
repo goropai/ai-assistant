@@ -33,6 +33,16 @@ class FaceBook(private val file: File?) {
         save()
     }
 
+    /** Нове ім'я для тих самих облич (якщо таке ім'я вже є — зразки об'єднуються). */
+    fun rename(old: String, new: String): Boolean {
+        val samples = people.remove(old) ?: return false
+        val target = people.getOrPut(new) { mutableListOf() }
+        target += samples
+        while (target.size > MAX_SAMPLES) target.removeAt(0)
+        save()
+        return true
+    }
+
     fun forget(name: String): Boolean = (people.remove(name) != null).also { if (it) save() }
 
     private fun load() {
