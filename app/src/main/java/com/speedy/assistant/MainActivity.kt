@@ -217,9 +217,12 @@ class MainActivity : AppCompatActivity() {
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
             books = com.speedy.assistant.books.Bookshelf(
-                ::storageRoots, java.io.File(filesDir, "books.json"),
+                storage, java.io.File(filesDir, "books.json"),
                 scans = com.speedy.assistant.books.Ocr(this, http),
             ),
+            media = mediaShelf,
+            playback = playback,
+            vlc = vlc,
             hasFileAccess = ::hasFileAccess,
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar,
@@ -273,6 +276,13 @@ class MainActivity : AppCompatActivity() {
                 assistant?.announceNotes() // відкладені (Спіді була зайнята / вночі)
             }
         }
+        // VLC: місце в аудіокнизі, наступний файл, слух вимкнено, поки грає.
+        lifecycleScope.launch {
+            while (isActive) {
+                delay(5_000)
+                assistant?.mediaTick()
+            }
+        }
         lifecycleScope.launch {
             while (isActive) {
                 delay(60_000)
@@ -318,6 +328,30 @@ class MainActivity : AppCompatActivity() {
                 updatePresence()
             }
         }
+    }
+
+    /** Один обхід сховища для книг і медіа (коли попросили; результат живе кілька хвилин). */
+    private val storage by lazy {
+        com.speedy.assistant.books.StorageScan(::storageRoots) {
+            com.speedy.assistant.books.Bookshelf.isBookFile(it) || com.speedy.assistant.media.MediaFiles.isMedia(it)
+        }
+    }
+    private val mediaShelf by lazy { com.speedy.assistant.media.MediaShelf(storage, java.io.File(filesDir, "media.json")) }
+    private val vlc: com.speedy.assistant.media.Vlc by lazy {
+        com.speedy.assistant.media.Vlc(this, launchForResult = { videoPlayer.launch(it) },
+            notesListener = android.content.ComponentName(this, com.speedy.assistant.phone.SpeedyNotifications::class.java))
+    }
+    private val playback: com.speedy.assistant.media.MediaPlayback by lazy {
+        com.speedy.assistant.media.MediaPlayback(vlc, mediaShelf, onEvent = { assistant?.onMediaEvent(it) })
+    }
+
+    /** Плеєр відео VLC закрився: позиція й тривалість — щоб продовжити з того місця. */
+    private val videoPlayer: androidx.activity.result.ActivityResultLauncher<Intent> = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        playback.onVideoResult(
+            ok = r.resultCode == RESULT_OK,
+            positionMs = r.data?.getLongExtra("extra_position", -1L) ?: -1L,
+            durationMs = r.data?.getLongExtra("extra_duration", -1L) ?: -1L,
+        )
     }
 
     /** Внутрішня пам'ять і картки пам'яті (корінь — до "/Android/" у теці застосунку на кожному носії). */

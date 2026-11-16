@@ -80,6 +80,10 @@ class Assistant(
     private val books: com.speedy.assistant.books.Bookshelf? = null,
     /** Чи є доступ до файлів (книги шукаємо по всьому сховищу). */
     private val hasFileAccess: () -> Boolean = { true },
+    /** Фільми, аудіокниги, музика — у VLC. */
+    private val media: com.speedy.assistant.media.MediaShelf? = null,
+    private val playback: com.speedy.assistant.media.MediaPlayback? = null,
+    private val vlc: com.speedy.assistant.media.Vlc? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -100,8 +104,26 @@ class Assistant(
     private var lastInteraction = SystemClock.uptimeMillis()
 
     fun start() {
-        if (!busy) ears.start()
+        // Поки VLC грає аудіокнигу чи музику, мікрофон не слухає (там теж говорять) — лише дотик.
+        if (!busy && playback?.playingAudio != true) ears.start()
         scheduleIdle()
+    }
+
+    private var mutedForMedia = false
+
+    /** Кожні кілька секунд: стежимо за VLC (місце, наступний файл) і вимикаємо слух, поки грає. */
+    fun mediaTick() {
+        val p = playback ?: return
+        p.tick()
+        if (busy) return
+        val playing = p.playingAudio
+        if (playing && !mutedForMedia) {
+            mutedForMedia = true
+            ears.stop()
+        } else if (!playing && mutedForMedia) {
+            mutedForMedia = false
+            ears.start()
+        }
     }
 
     fun stop() {
@@ -310,7 +332,10 @@ class Assistant(
      * думає) — негайна зупинка. Під час руху мікрофон вимкнено, тож це головний "стоп".
      */
     fun manualWake() {
-        if (busy) interrupt() else runBusy { greet() }
+        if (busy) return interrupt()
+        // Грає аудіо у VLC — пауза, і Спіді слухає ("продовжуй" — грає далі).
+        if (playback?.pause() == true) mutedForMedia = false
+        runBusy { greet() }
     }
 
     private fun interrupt() {
@@ -421,7 +446,9 @@ class Assistant(
                     face.setMood(Mood.LISTENING)
                 }
                 // Спитала й чекає відповіді — слухаємо одразу, щоб не обрізати початок фрази.
-                ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
+                // Увімкнула аудіо у VLC — не слухаємо (mediaTick увімкне слух, коли замовкне).
+                if (playback?.playingAudio == true) mutedForMedia = true
+                else ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
                 scheduleIdle()
             }
         }
@@ -440,6 +467,7 @@ class Assistant(
         when (cmd) {
             LocalCommand.STOP -> {
                 robot.stop()
+                playback?.pause()
                 face.setMood(Mood.NEUTRAL)
                 say("Зупиняюсь.")
                 return
@@ -591,6 +619,8 @@ class Assistant(
                 }
             }
         }
+        // Фільми й аудіокниги у VLC — без моделі ("увімкни Дюну" без такого файлу — далі).
+        com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return }
         // Книги вголос — без моделі ("почитай Кобзаря" без такої книги — далі, до моделі).
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return }
         // Сповіщення й керування іншими застосунками — без моделі.
@@ -883,6 +913,117 @@ class Assistant(
         }
     }
 
+    /** @return false — це не про медіа (хай далі вирішують книги / модель). */
+    private suspend fun handleMedia(cmd: com.speedy.assistant.media.MediaCommand): Boolean {
+        val shelf = media ?: return false
+        val player = playback ?: return false
+        if (cmd is com.speedy.assistant.media.MediaCommand.Pause) {
+            if (!player.pause()) say("Зараз нічого не грає.")
+            return true
+        }
+        Log.i(TAG, "медіа: $cmd")
+        if (!hasFileAccess()) {
+            face.setMood(Mood.THINKING)
+            say("Щоб шукати фільми й аудіокниги, мені потрібен доступ до файлів. Відкриваю налаштування.")
+            openAccessSettings("files")
+            return true
+        }
+        when (cmd) {
+            is com.speedy.assistant.media.MediaCommand.Play -> {
+                val title = cmd.title ?: return true.also { continueMedia(cmd.kind) }
+                face.setMood(Mood.THINKING)
+                val item = withContext(Dispatchers.IO) { shelf.find(title, cmd.kind) }
+                if (item == null) {
+                    if (cmd.kind == null) return false
+                    face.setMood(Mood.SAD)
+                    say("Не знайшла ${kindWord(cmd.kind)} «$title».")
+                } else startMedia(item)
+            }
+            is com.speedy.assistant.media.MediaCommand.Continue -> continueMedia(cmd.kind)
+            is com.speedy.assistant.media.MediaCommand.List -> {
+                face.setMood(Mood.THINKING)
+                val items = withContext(Dispatchers.IO) { shelf.all() }.filter { cmd.kind == null || it.kind == cmd.kind }
+                    // Тека (аудіокнига, серіал) замість кожного її файлу окремо.
+                    .let { all -> all.filter { it.tracks.size > 1 || all.none { f -> f.tracks.size > 1 && it.tracks[0] in f.tracks } } }
+                face.setMood(Mood.HAPPY)
+                say(
+                    if (items.isEmpty()) "Не знайшла в телефоні ${if (cmd.kind == com.speedy.assistant.media.MediaKind.VIDEO) "жодного відео" else "жодного аудіо"}."
+                    else "У мене є: " + items.take(MAX_LISTED).joinToString(", ") { "«${it.title}»" } +
+                        (if (items.size > MAX_LISTED) " і ще ${items.size - MAX_LISTED}." else ".") +
+                        " Скажи «увімкни» і назву."
+                )
+            }
+            com.speedy.assistant.media.MediaCommand.Pause -> {}
+        }
+        return true
+    }
+
+    /** "Продовж дивитись" / "наступна серія": останнє того виду — з місця, де зупинились. */
+    private suspend fun continueMedia(kind: com.speedy.assistant.media.MediaKind?) {
+        if (kind != com.speedy.assistant.media.MediaKind.VIDEO && playback?.canResume == true) {
+            playback.resume()
+            return
+        }
+        val item = media?.last()?.takeIf { kind == null || it.kind == kind }
+            ?: return say("Ми ще нічого не ${if (kind == com.speedy.assistant.media.MediaKind.AUDIO) "слухали" else "дивились"}. Скажи «увімкни фільм» чи «увімкни аудіокнигу» і назву.")
+        startMedia(item)
+    }
+
+    private fun kindWord(kind: com.speedy.assistant.media.MediaKind?) =
+        if (kind == com.speedy.assistant.media.MediaKind.VIDEO) "відео" else "аудіо"
+
+    private var mediaTipsGiven = false
+
+    /** Увімкнути у VLC з місця, де зупинились (немає VLC — відкрити магазин). */
+    private suspend fun startMedia(item: com.speedy.assistant.media.MediaItem) {
+        val v = vlc ?: return
+        val shelf = media ?: return
+        if (!v.installed) {
+            face.setMood(Mood.THINKING)
+            say("Для цього мені потрібен плеєр VLC. Відкриваю магазин застосунків — встанови його й попроси ще раз.")
+            return v.openStore()
+        }
+        val place = shelf.place(item)?.takeIf { !it.finished }
+        val resume = place != null && (place.positionMs > 30_000 || place.track > 0)
+        val part = if (item.tracks.size > 1 && place != null) ", ${if (item.kind == com.speedy.assistant.media.MediaKind.VIDEO) "серія" else "частина"} ${place.track + 1}" else ""
+        face.setMood(Mood.HAPPY)
+        say(if (resume) "Продовжую «${item.title}»$part." else "Вмикаю «${item.title}».")
+        if (item.kind == com.speedy.assistant.media.MediaKind.AUDIO && !mediaTipsGiven) {
+            mediaTipsGiven = true
+            say(
+                "Поки грає, я не слухаю — торкнись мене, щоб поставити на паузу й поговорити." +
+                    if (!v.canTrack) " А щоб я пам'ятала, де ми зупинились, дозволь мені читати сповіщення." else ""
+            )
+        }
+        inConversation = false
+        playback?.start(item, place)
+    }
+
+    /** Подія відтворення: закрили фільм, додивились серію, дослухали аудіокнигу. */
+    fun onMediaEvent(event: com.speedy.assistant.media.MediaEvent) {
+        scope.launch {
+            awaitTurn()
+            runBusy {
+                when (event) {
+                    is com.speedy.assistant.media.MediaEvent.Stopped -> {
+                        val min = event.positionMs / 60_000
+                        face.setMood(Mood.HAPPY)
+                        say("Запам'ятала, де ми зупинились: ${min} ${com.speedy.assistant.english.EnglishLesson.plural(min.toInt(), "хвилина", "хвилини", "хвилин")}. Скажи «продовж дивитись», щоб дивитись далі.")
+                    }
+                    is com.speedy.assistant.media.MediaEvent.NextReady -> {
+                        face.setMood(Mood.HAPPY)
+                        say("Серію закінчено. Скажи «наступна серія», щоб дивитись далі.")
+                    }
+                    is com.speedy.assistant.media.MediaEvent.Finished -> {
+                        face.setMood(Mood.HAPPY)
+                        chirps.play(Chirp.HAPPY)
+                        say("«${event.item.title}» — до кінця.")
+                    }
+                }
+            }
+        }
+    }
+
     /** Спитала "яку почитати?" — наступна фраза, ймовірно, назва книги. */
     private var awaitingBook = false
     /** Коли востаннє читала книгу: "продовжуй" одразу після — це про книгу. */
@@ -891,6 +1032,8 @@ class Assistant(
     /** @return false — це не про книги (хай відповідає модель). */
     private suspend fun handleBook(cmd: BookCommand): Boolean {
         val shelf = books ?: return false
+        // "Продовжуй" після паузи аудіо у VLC (дотик) — грає далі.
+        if (cmd is BookCommand.Continue && cmd.bare && playback?.canResume == true) return true.also { playback.resume() }
         if (cmd is BookCommand.Continue && cmd.bare && SystemClock.uptimeMillis() - lastReadAt > BARE_CONTINUE_MS) return false
         val reader = partner()
         // "почитай мені" без назви — книга, лише якщо є що продовжити.
