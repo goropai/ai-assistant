@@ -15,7 +15,7 @@ object Pitch {
         val maxLag = (rate / MIN_HZ).toInt().coerceAtMost(count / 2)
         var energy = 0.0
         for (i in 0 until count) energy += samples[i].toDouble() * samples[i]
-        if (energy / count < 300.0 * 300.0) return null // надто тихо
+        if (energy / count < 30.0 * 30.0) return null // тиша (мікрофон телефона пише тихо — поріг низький)
         var bestLag = -1
         var best = 0.0
         val corr = DoubleArray(maxLag + 2)

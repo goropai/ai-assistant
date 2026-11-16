@@ -33,6 +33,8 @@ class FaceIdTracker(
         private set
     var closestSeenAt: Long = Long.MIN_VALUE / 2
         private set
+    var closestArea: Float = 0f
+        private set
 
     /** Хто з облич останнього кадру — хто (для ознак обличчя в профілі). */
     var lastMatches: List<Pair<String, FaceObservation>> = emptyList()
@@ -68,7 +70,10 @@ class FaceIdTracker(
             if (closest == null || face.area > closest.second) closest = matched to face.area
         }
         closestName = closest?.first
-        closestSeenAt = if (closest != null) now else closestSeenAt
+        if (closest != null) {
+            closestSeenAt = now
+            closestArea = closest.second
+        }
 
         for (name in seenNames) {
             lastSeen[name] = now

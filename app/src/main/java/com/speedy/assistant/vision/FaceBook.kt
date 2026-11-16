@@ -127,7 +127,7 @@ class FaceBook(private val file: File?) {
         const val MATCH_THRESHOLD = 0.6f
         const val MAX_SAMPLES = 8
         /** Кадри одного образу мають бути схожі між собою щонайменше так. */
-        const val CONSISTENT = 0.7f
+        const val CONSISTENT = 0.6f
         /** Поріг "можливо, та сама людина" для перевірки перед записом нового імені (впізнавання — 0.6). */
         const val POSSIBLE_MATCH = 0.5f
         const val MIN_CONSISTENT = 2

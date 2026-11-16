@@ -158,7 +158,12 @@ class VoiceListener(
                 preroll.addLast(buffer)
                 if (preroll.size > PREROLL_FRAMES) preroll.removeFirst()
                 if (!gate.feed(SoundGate.levelDb(buffer, n))) continue
-                // Хтось заговорив: тон голосу з буфера (локально) — дитина чи дорослий.
+                // Хтось заговорив: ще ~0.25 с мовлення (у буфері до спрацювання — переважно тиша),
+                // і тон голосу локально — дитина чи дорослий.
+                repeat(PITCH_EXTRA_FRAMES) {
+                    val extra = ShortArray(FRAME)
+                    if (record.read(extra, 0, FRAME) > 0) preroll.addLast(extra)
+                }
                 Pitch.ofSpeech(preroll.toList().takeLast(PREROLL_FRAMES))?.let {
                     lastPitchHz = it
                     lastPitchAt = SystemClock.uptimeMillis()
@@ -357,6 +362,8 @@ class VoiceListener(
         private const val FRAME = RATE / 50 // 20 мс
         /** Запас звуку перед спрацюванням вартового: 30 кадрів по 20 мс. */
         private const val PREROLL_FRAMES = 30
+        /** Скільки кадрів мовлення дочитати після спрацювання вартового для оцінки тону. */
+        private const val PITCH_EXTRA_FRAMES = 12
         private const val MAX_UTTERANCE_MS = 15_000L
         /** Скільки слухати після останньої почутої мови, перш ніж повернутися до вартового. */
         private const val SESSION_MS = 8_000L

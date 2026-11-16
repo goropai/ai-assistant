@@ -23,6 +23,11 @@ class People(
     fun speaker(now: Long, maxAgeMs: Long = 10_000): String? =
         tracker.closestName?.takeIf { now - tracker.closestSeenAt <= maxAgeMs }
 
+    /** Хтось сидить перед Спіді: найближче обличчя досить велике й видно щойно. */
+    @Synchronized
+    fun someoneClose(now: Long, maxAgeMs: Long = 4_000): Boolean =
+        tracker.closestArea >= 0.04f && now - tracker.closestSeenAt <= maxAgeMs
+
     /** Знайомі обличчя з останнього кадру. */
     @Synchronized
     fun lastMatches(): List<Pair<String, FaceObservation>> = tracker.lastMatches

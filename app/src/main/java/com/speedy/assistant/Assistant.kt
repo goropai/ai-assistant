@@ -201,7 +201,10 @@ class Assistant(
             say("Ти дуже схожий на ${introduced.name}. Якщо я помиляюсь, скажи: «це не ${introduced.name}, це $name».")
         } else if (introduced == People.Introduction.Unclear) {
             face.setMood(Mood.THINKING)
-            say("Я тебе погано роздивилась. Подивись на мене рівно кілька секунд і скажи ще раз.")
+            say("Я тебе погано роздивилась. Підійди ближче, подивись на мене і скажи своє ім'я ще раз.")
+            // Чекаємо ім'я знову: "я Ліна" наступною фразою теж підійде.
+            awaitingName = true
+            awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS * 2
         } else {
             val now = SystemClock.uptimeMillis()
             val known = p.presentNames(now)
@@ -291,7 +294,11 @@ class Assistant(
         // Йде урок і Спіді чекає відповіді — це вона.
         lessonAnswer?.let { if (it.complete(candidates)) return }
         if (busy) return
-        val inWindow = SystemClock.uptimeMillis() < awaitingCommandUntil
+        val now = SystemClock.uptimeMillis()
+        // Дитина не повторює "Спіді" щоразу: поки хтось поруч (обличчя близько) і розмова була
+        // нещодавно — це продовження розмови.
+        val nearContinuation = people?.someoneClose(now) == true && now - lastInteraction < NEAR_CONTINUATION_MS
+        val inWindow = now < awaitingCommandUntil || nearContinuation
         if (awaitingPetName && inWindow && WakeWord.extractCommand(candidates) == null) {
             val name = candidates.firstNotNullOfOrNull { LocalCommands.parsePetName(it) ?: LocalCommands.parseName(it, answer = true) }
             if (name != null) {
@@ -1004,7 +1011,9 @@ class Assistant(
         const val TAG = "Assistant"
         const val FOLLOW_UP_WINDOW_MS = 8_000L
         /** Скільки після відповіді чекати наступної репліки без "Спіді". */
-        const val CONVERSATION_WINDOW_MS = 20_000L
+        const val CONVERSATION_WINDOW_MS = 45_000L
+        /** Хтось сидить перед Спіді — фраза протягом цього часу після розмови теж до неї. */
+        const val NEAR_CONTINUATION_MS = 120_000L
         const val LESSON_LISTEN_MS = 9_000L
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 3
