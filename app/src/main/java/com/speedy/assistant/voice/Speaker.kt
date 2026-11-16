@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
  * лишиться тим самим.
  */
 class Speaker(
-    context: Context,
+    private val context: Context,
     private val pitch: Float,
     private val rate: Float,
     private val preferredVoice: String,
@@ -25,17 +25,45 @@ class Speaker(
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     private lateinit var tts: TextToSpeech
 
+    /** Синтезатори, які ще можна спробувати (null — системний за замовчуванням). */
+    private val candidates = ArrayDeque<String?>().apply { add(null) }
+    private var enginesListed = false
+
     init {
-        tts = TextToSpeech(context.applicationContext) { status ->
-            ready.complete(status == TextToSpeech.SUCCESS && configure())
+        tryNextEngine()
+    }
+
+    /**
+     * Системний синтезатор може не знати української (на Android 7.1 Google TTS 3.x її не має,
+     * а новіший туди не ставиться) — тоді пробуємо інші встановлені, напр. RHVoice з F-Droid.
+     */
+    private fun tryNextEngine() {
+        val engine = candidates.removeFirstOrNull()
+        if (engine == null && enginesListed) {
+            Log.e(TAG, "Жоден синтезатор не знає української. Встанови RHVoice (F-Droid) і український голос у ньому.")
+            ready.complete(false)
+            return
         }
+        tts = TextToSpeech(context.applicationContext, { status ->
+            if (status == TextToSpeech.SUCCESS && configure()) {
+                Log.i(TAG, "Синтезатор: ${tts.defaultEngine.takeIf { engine == null } ?: engine}")
+                ready.complete(true)
+                return@TextToSpeech
+            }
+            if (!enginesListed) {
+                enginesListed = true
+                candidates += tts.engines.map { it.name }.filter { it != tts.defaultEngine }
+            }
+            tts.shutdown()
+            tryNextEngine()
+        }, engine)
     }
 
     private fun configure(): Boolean {
         val locale = Locale("uk", "UA")
         val result = tts.setLanguage(locale)
         if (result < TextToSpeech.LANG_AVAILABLE) {
-            Log.e(TAG, "Українська мова TTS недоступна ($result). Встанови голосові дані в налаштуваннях TTS.")
+            Log.w(TAG, "Українська недоступна в синтезаторі ($result)")
             return false
         }
         val voices = tts.voices.orEmpty().filter { it.locale.language == "uk" }
