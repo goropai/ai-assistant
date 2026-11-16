@@ -1,0 +1,156 @@
+package com.speedy.assistant.books
+
+import org.json.JSONObject
+import java.io.File
+
+/** Місце в книзі: розділ (сторінка PDF) і речення в ньому. */
+data class Place(val chapter: Int, val sentence: Int, val chapters: Int = 0, val title: String = "", val finished: Boolean = false)
+
+/**
+ * Книги в пам'яті телефона й на картці: шукаємо, коли попросили почитати (не заздалегідь),
+ * по всьому сховищу, крім службових тек. Місце читання — у files/books.json: одне на книгу,
+ * а ще — остання книга кожного, хто слухав (і остання взагалі).
+ */
+class Bookshelf(
+    private val roots: () -> List<File>,
+    private val progressFile: File?,
+    private val isBook: (File) -> Boolean = Books::isBook,
+) {
+    private var cache: List<File> = emptyList()
+    private var cachedAt = Long.MIN_VALUE / 2
+    private val places = mutableMapOf<String, Place>()
+    private val lastOf = mutableMapOf<String, String>()
+
+    init {
+        progressFile?.takeIf { it.exists() }?.let {
+            try {
+                val o = JSONObject(it.readText())
+                o.optJSONObject("books")?.let { b ->
+                    for (path in b.keys()) {
+                        val p = b.getJSONObject(path)
+                        places[path] = Place(p.optInt("chapter"), p.optInt("sentence"), p.optInt("chapters"), p.optString("title"), p.optBoolean("finished"))
+                    }
+                }
+                o.optJSONObject("last")?.let { l -> for (who in l.keys()) lastOf[who] = l.getString(who) }
+            } catch (e: Exception) {
+                places.clear(); lastOf.clear()
+            }
+        }
+    }
+
+    /** Усі книги (повільно: обхід сховища; результат живе кілька хвилин). Викликати не в головному потоці. */
+    @Synchronized
+    fun all(now: Long = System.currentTimeMillis()): List<File> {
+        if (now - cachedAt < CACHE_MS) return cache
+        val found = mutableListOf<File>()
+        val seen = mutableSetOf<String>()
+        val started = System.currentTimeMillis()
+        val queue = ArrayDeque(roots().filter { it.isDirectory }.map { it to 0 })
+        while (queue.isNotEmpty() && System.currentTimeMillis() - started < SCAN_BUDGET_MS) {
+            val (dir, depth) = queue.removeFirst()
+            val real = runCatching { dir.canonicalPath }.getOrDefault(dir.path)
+            if (!seen.add(real)) continue // та сама тека іншим шляхом (/sdcard, /storage/emulated/0)
+            for (f in dir.listFiles().orEmpty()) {
+                if (f.name.startsWith('.')) continue
+                if (f.isDirectory) {
+                    if (depth < MAX_DEPTH && !skipDir(f)) queue.addLast(f to depth + 1)
+                } else if (isBook(f) && (!f.name.endsWith(".txt", ignoreCase = true) || f.length() >= MIN_TXT_BYTES)) {
+                    found += f
+                }
+            }
+        }
+        cache = found.distinctBy { runCatching { it.canonicalPath }.getOrDefault(it.path) }
+        cachedAt = now
+        return cache
+    }
+
+    /** Книга за сказаною назвою (українською чи латиницею в імені файлу); null — нічого схожого. */
+    fun find(query: String): File? = best(query, all())
+
+    @Synchronized
+    fun place(file: File): Place? = places[file.path]
+
+    @Synchronized
+    fun save(file: File, reader: String?, place: Place) {
+        places[file.path] = place
+        reader?.let { lastOf[it] = file.path }
+        lastOf[ANYONE] = file.path
+        write()
+    }
+
+    /** Остання книга цього слухача (або будь-чия, якщо він ще нічого не слухав) — якщо файл ще є. */
+    @Synchronized
+    fun last(reader: String?): File? =
+        (reader?.let { lastOf[it] } ?: lastOf[ANYONE])?.let(::File)?.takeIf { it.exists() }
+
+    /** Назва для мовлення: збережена з самої книги, інакше — з імені файлу. */
+    @Synchronized
+    fun title(file: File): String = places[file.path]?.title?.takeIf { it.isNotBlank() } ?: Books.titleFromName(file)
+
+    private fun write() {
+        val f = progressFile ?: return
+        val books = JSONObject()
+        places.forEach { (path, p) ->
+            books.put(path, JSONObject().put("chapter", p.chapter).put("sentence", p.sentence)
+                .put("chapters", p.chapters).put("title", p.title).put("finished", p.finished))
+        }
+        f.writeText(JSONObject().put("books", books).put("last", JSONObject(lastOf as Map<*, *>)).toString())
+    }
+
+    private fun skipDir(dir: File): Boolean {
+        val name = dir.name.lowercase()
+        if (name in SKIP) return true
+        // Android/data, Android/obb — дані застосунків (і закриті на новіших Android).
+        return dir.parentFile?.name.equals("Android", ignoreCase = true) && name in setOf("data", "obb", "media")
+    }
+
+    companion object {
+        const val ANYONE = "*"
+        private const val CACHE_MS = 5 * 60_000L
+        private const val SCAN_BUDGET_MS = 15_000L
+        private const val MAX_DEPTH = 12
+        /** Менші TXT — журнали, ліцензії, нотатки, а не книги. */
+        private const val MIN_TXT_BYTES = 20_000L
+        private val SKIP = setOf("cache", ".thumbnails", "thumbnails", "log", "logs", "lost.dir", "dcim")
+
+        /** Найкраще збігання назви: частка слів запиту, знайдених у назві файлу (з транслітерацією). */
+        fun best(query: String, files: List<File>): File? {
+            val q = words(query).filter { it !in FILLER }
+            if (q.isEmpty()) return null
+            return files.map { it to score(q, words(Books.titleFromName(it) + " " + (it.parentFile?.name ?: ""))) }
+                .filter { it.second >= 0.5 }
+                .maxWithOrNull(compareBy<Pair<File, Double>> { it.second }.thenBy { it.first.lastModified() })
+                ?.first
+        }
+
+        private fun score(query: List<String>, title: List<String>): Double =
+            query.count { w -> title.any { similar(w, it) } }.toDouble() / query.size
+
+        /** Слова збігаються, якщо однаково починаються (відмінки: "Кобзаря" ~ "Kobzar"). */
+        private fun similar(a: String, b: String): Boolean {
+            if (a.toIntOrNull() != null || b.toIntOrNull() != null) return a == b
+            val n = minOf(4, a.length, b.length)
+            return n >= 2 && a.length >= 2 && b.length >= 2 && a.take(n) == b.take(n) && (n == 4 || a == b)
+        }
+
+        /** Слова назви латиницею, у спрощеному вигляді (h=g, y=i: "Гаррі" і "Harry" — одне слово). */
+        fun words(s: String): List<String> =
+            translit(s.lowercase()).split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
+                .map { it.replace("kh", "h").replace('h', 'g').replace('y', 'i').replace('j', 'i').replace('w', 'v') }
+
+        private fun translit(s: String): String = buildString {
+            for (c in s) append(LATIN[c] ?: c.toString())
+        }
+
+        private val LATIN = mapOf(
+            'а' to "a", 'б' to "b", 'в' to "v", 'г' to "h", 'ґ' to "g", 'д' to "d", 'е' to "e", 'є' to "ie",
+            'ж' to "zh", 'з' to "z", 'и' to "y", 'і' to "i", 'ї' to "i", 'й' to "i", 'к' to "k", 'л' to "l",
+            'м' to "m", 'н' to "n", 'о' to "o", 'п' to "p", 'р' to "r", 'с' to "s", 'т' to "t", 'у' to "u",
+            'ф' to "f", 'х' to "kh", 'ц' to "ts", 'ч' to "ch", 'ш' to "sh", 'щ' to "shch", 'ь' to "", 'ю' to "iu",
+            'я' to "ia", '\'' to "", '’' to "", 'ы' to "y", 'э' to "e", 'ё' to "e", 'ъ' to "",
+        )
+
+        /** Слова з прохання, яких у назві немає: "почитай мені ту книжку про…". */
+        private val FILLER = words("про книгу книжку книжечку книга ту цю оцю мені нам будь ласка вголос").toSet()
+    }
+}

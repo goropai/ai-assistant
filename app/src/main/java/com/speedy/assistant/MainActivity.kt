@@ -141,6 +141,9 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.ACCESS_FINE_LOCATION,
             // Теж не обов'язкові: контакти й календар — лише для питань про них.
             Manifest.permission.READ_CONTACTS, Manifest.permission.READ_CALENDAR,
+        ) + (
+            // Книги в пам'яті телефона; на Android 11+ — окремий "доступ до всіх файлів" (на прохання).
+            if (android.os.Build.VERSION.SDK_INT < 30) arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE) else emptyArray()
         )
         if (needed.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             initAssistant()
@@ -200,6 +203,7 @@ class MainActivity : AppCompatActivity() {
             openAccessSettings = { which ->
                 // Системні доступи — лише за PIN батьків.
                 com.speedy.assistant.settings.PinDialog.require(this, settings) {
+                    if (which == "files") return@require openFileAccess()
                     val action = if (which == "notes") "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"
                     else android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
                     try { startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { toast("Не вдалося відкрити налаштування") }
@@ -210,6 +214,8 @@ class MainActivity : AppCompatActivity() {
             isOnline = { !networkLost && connectivity.activeNetwork != null },
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
+            books = com.speedy.assistant.books.Bookshelf(::storageRoots, java.io.File(filesDir, "books.json")),
+            hasFileAccess = ::hasFileAccess,
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar,
                     useOffline = { networkLost || connectivity.activeNetwork == null }).also {
@@ -306,6 +312,32 @@ class MainActivity : AppCompatActivity() {
                 checkBrain()
                 updatePresence()
             }
+        }
+    }
+
+    /** Внутрішня пам'ять і картки пам'яті (корінь — до "/Android/" у теці застосунку на кожному носії). */
+    private fun storageRoots(): List<java.io.File> {
+        @Suppress("DEPRECATION")
+        val roots = mutableListOf(android.os.Environment.getExternalStorageDirectory())
+        getExternalFilesDirs(null).filterNotNull().mapTo(roots) { java.io.File(it.path.substringBefore("/Android/")) }
+        return roots.distinctBy { it.path }
+    }
+
+    private fun hasFileAccess(): Boolean =
+        if (android.os.Build.VERSION.SDK_INT >= 30) android.os.Environment.isExternalStorageManager()
+        else ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private val filesPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) toast("Без доступу до файлів Спіді не бачить книг")
+    }
+
+    private fun openFileAccess() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return filesPermission.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+        val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, android.net.Uri.parse("package:$packageName"))
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            try { startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) } catch (e: Exception) { toast("Не вдалося відкрити налаштування") }
         }
     }
 

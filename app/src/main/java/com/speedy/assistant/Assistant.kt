@@ -24,12 +24,18 @@ import com.speedy.assistant.voice.VoiceListener
 import com.speedy.assistant.voice.WakeWord
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.speedy.assistant.books.BookCommand
+import com.speedy.assistant.books.Books
+import com.speedy.assistant.books.Place
+import java.io.File
 
 /**
  * Оркестратор: почути -> подумати (LLM) -> подивитись/поїхати -> відповісти.
@@ -70,6 +76,9 @@ class Assistant(
     private val childLimitMinutes: () -> Int = { 0 },
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
+    private val books: com.speedy.assistant.books.Bookshelf? = null,
+    /** Чи є доступ до файлів (книги шукаємо по всьому сховищу). */
+    private val hasFileAccess: () -> Boolean = { true },
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -106,12 +115,24 @@ class Assistant(
     /** Попередження про розряд: дочекатися паузи в розмові й попросити зарядку. */
     fun announceLowBattery(level: Int) {
         scope.launch {
-            while (busy) delay(500)
+            awaitTurn()
             runBusy {
                 face.setMood(Mood.SAD)
                 chirps.play(Chirp.LOW_BATTERY)
                 say("Мій заряд $level ${BatteryAlerts.percentWord(level)}. Постав мене, будь ласка, на зарядку.")
             }
+        }
+    }
+
+    /** Скільки подій (нагадування, розряд) чекають паузи: читання книги поступається їм. */
+    private var waitingForTurn = 0
+
+    private suspend fun awaitTurn() {
+        waitingForTurn++
+        try {
+            while (busy) delay(500)
+        } finally {
+            waitingForTurn--
         }
     }
 
@@ -145,7 +166,7 @@ class Assistant(
                 Log.w(TAG, "launch update check failed: ${e.message}")
                 null
             } ?: return@launch
-            while (busy) delay(1000)
+            awaitTurn()
             runBusy { announceUpdate(info) }
         }
     }
@@ -326,9 +347,22 @@ class Assistant(
                 return
             }
         }
+        if (awaitingBook && inWindow && WakeWord.extractCommand(candidates) == null) {
+            val phrase = candidates.firstOrNull()?.takeIf { it.isNotBlank() }
+            if (phrase != null) {
+                awaitingCommandUntil = 0
+                awaitingBook = false
+                lastInteraction = SystemClock.uptimeMillis()
+                // "Кобзар" у відповідь на "яку почитати?" — назва; "почитай Кобзар" — теж.
+                val cmd = com.speedy.assistant.books.BookCommands.parse(phrase) ?: BookCommand.Read(phrase, explicit = true)
+                runBusy { if (!handleBook(cmd)) handle(phrase) }
+                return
+            }
+        }
         if (!inWindow) {
             awaitingName = false
             awaitingPetName = false
+            awaitingBook = false
             inConversation = false
         }
         val command = WakeWord.extractCommand(candidates)
@@ -556,6 +590,8 @@ class Assistant(
                 }
             }
         }
+        // Книги вголос — без моделі ("почитай Кобзаря" без такої книги — далі, до моделі).
+        com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return }
         // Сповіщення й керування іншими застосунками — без моделі.
         com.speedy.assistant.phone.HandsCommands.parse(command, otherAppOpen = !inForeground())?.let { return handleHands(it) }
         // Дії на телефоні — без моделі; якщо не вийшло (нема такого застосунку) — далі до моделі.
@@ -674,7 +710,7 @@ class Assistant(
     /** Час нагадування настав — дочекатися паузи в розмові й сказати. */
     fun remind(r: com.speedy.assistant.initiative.Reminder, late: Boolean = false) {
         scope.launch {
-            while (busy) delay(500)
+            awaitTurn()
             runBusy {
                 face.setMood(Mood.SURPRISED)
                 chirps.play(Chirp.ATTENTION)
@@ -842,6 +878,165 @@ class Assistant(
                         else -> "Не вийшло."
                     }
                 )
+            }
+        }
+    }
+
+    /** Спитала "яку почитати?" — наступна фраза, ймовірно, назва книги. */
+    private var awaitingBook = false
+    /** Коли востаннє читала книгу: "продовжуй" одразу після — це про книгу. */
+    private var lastReadAt = Long.MIN_VALUE / 2
+
+    /** @return false — це не про книги (хай відповідає модель). */
+    private suspend fun handleBook(cmd: BookCommand): Boolean {
+        val shelf = books ?: return false
+        if (cmd is BookCommand.Continue && cmd.bare && SystemClock.uptimeMillis() - lastReadAt > BARE_CONTINUE_MS) return false
+        val reader = partner()
+        // "почитай мені" без назви — книга, лише якщо є що продовжити.
+        if (cmd is BookCommand.Read && cmd.title == null && !cmd.explicit && shelf.last(reader) == null) return false
+        Log.i(TAG, "книги: $cmd")
+        if (!hasFileAccess()) {
+            face.setMood(Mood.THINKING)
+            say("Щоб шукати книги, мені потрібен доступ до файлів. Відкриваю налаштування.")
+            openAccessSettings("files")
+            return true
+        }
+        val current = shelf.last(reader)
+        val place = current?.let { shelf.place(it) }
+        when (cmd) {
+            is BookCommand.Read -> {
+                val title = cmd.title
+                if (title == null) {
+                    if (current != null && place?.finished != true) readBook(current) else offerBooks()
+                    return true
+                }
+                face.setMood(Mood.THINKING)
+                val file = withContext(Dispatchers.IO) { shelf.find(title) }
+                if (file == null) {
+                    if (!cmd.explicit) return false
+                    offerBooks("Не знайшла книгу «$title».")
+                } else readBook(file)
+            }
+            is BookCommand.Continue -> if (current == null) offerBooks("Ми ще нічого не читали.") else readBook(current)
+            BookCommand.List -> offerBooks()
+            BookCommand.Which -> {
+                if (current == null) return true.also { say("Ми ще нічого не читали. Скажи «почитай книгу» і назву.") }
+                val title = shelf.title(current)
+                face.setMood(Mood.HAPPY)
+                say(
+                    if (place == null || place.finished) "Останньою ми читали «$title» і дочитали до кінця."
+                    else "Ми читаємо «$title», ${unitWord(current)} ${place.chapter + 1}" +
+                        (if (place.chapters > 0) " з ${place.chapters}." else ".")
+                )
+            }
+            BookCommand.FromStart -> {
+                if (current == null) return true.also { offerBooks("Ми ще нічого не читали.") }
+                readBook(current, Place(0, 0), "Читаю «${shelf.title(current)}» з початку.")
+            }
+            BookCommand.ChapterStart, BookCommand.NextChapter, BookCommand.PreviousChapter -> {
+                if (current == null || place == null) return true.also { offerBooks("Ми ще нічого не читали.") }
+                val chapter = when (cmd) {
+                    BookCommand.NextChapter -> place.chapter + 1
+                    BookCommand.PreviousChapter -> place.chapter - 1
+                    else -> place.chapter
+                }
+                val unit = unitWord(current)
+                if (chapter < 0) return true.also { say(if (unit == "розділ") "Це перший розділ." else "Це перша сторінка.") }
+                if (place.chapters in 1..chapter) return true.also { say(if (unit == "розділ") "Це останній розділ." else "Це остання сторінка.") }
+                readBook(current, Place(chapter, 0), "${unit.replaceFirstChar { it.uppercase() }} ${chapter + 1}.")
+            }
+        }
+        return true
+    }
+
+    /** Що є на полиці: останні прочитані — першими; потім чекаємо назву. */
+    private suspend fun offerBooks(prefix: String? = null) {
+        val shelf = books ?: return
+        face.setMood(Mood.THINKING)
+        val all = withContext(Dispatchers.IO) { shelf.all() }
+        val start = prefix?.let { "$it " }.orEmpty()
+        if (all.isEmpty()) {
+            face.setMood(Mood.SAD)
+            return say("${start}У телефоні я не знайшла жодної книги. Скопіюй у пам'ять телефона файли ${BOOK_FORMATS}, у будь-яку теку.")
+        }
+        val titles = all.sortedWith(compareByDescending<File> { shelf.place(it) != null }.thenBy { shelf.title(it) })
+            .map { shelf.title(it) }.distinct()
+        val more = titles.size - MAX_LISTED
+        face.setMood(Mood.HAPPY)
+        say(start + (if (titles.size == 1) "У мене є одна книга: «${titles[0]}». " else "У мене є: ") +
+            (if (titles.size == 1) "" else titles.take(MAX_LISTED).joinToString(", ") { "«$it»" } + (if (more > 0) " і ще $more. " else ". ")) +
+            "Яку почитати?")
+        awaitingBook = true
+        awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
+    }
+
+    private fun unitWord(file: File) = if (file.name.endsWith(".pdf", ignoreCase = true)) "сторінка" else "розділ"
+
+    /**
+     * Читає книгу вголос із [from] (інакше — зі збереженого місця), поки не дочитає, не торкнуться
+     * екрана або не настане нагадування. Місце зберігається перед кожним фрагментом, тож після
+     * зупинки продовжуємо з перерваного речення.
+     */
+    private suspend fun readBook(file: File, from: Place? = null, intro: String? = null) {
+        val shelf = books ?: return
+        val reader = partner()
+        val saved = shelf.place(file)
+        face.setMood(Mood.THINKING)
+        val book = try {
+            withContext(Dispatchers.IO) { Books.open(file) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: com.speedy.assistant.books.NoTextException) {
+            face.setMood(Mood.SAD)
+            return say("У книзі «${shelf.title(file)}» немає тексту, який я можу прочитати.")
+        } catch (e: Exception) {
+            Log.w(TAG, "книга ${file.path}: ${e.message}")
+            face.setMood(Mood.SAD)
+            return say("Не вдалося відкрити «${shelf.title(file)}» — файл пошкоджений або незнайомого формату.")
+        }
+        book.use {
+            if (book.chapters == 0) return say("У книзі «${shelf.title(file)}» порожньо.")
+            val title = book.title ?: Books.titleFromName(file)
+            val fresh = from == null && (saved == null || saved.finished)
+            val start = from ?: saved?.takeIf { !it.finished } ?: Place(0, 0)
+            var chapter = start.chapter.coerceIn(0, book.chapters - 1)
+            var sentence = start.sentence
+            Log.i(TAG, "читаю ${file.path} з ${chapter + 1}/${book.chapters}, речення $sentence")
+            inConversation = false
+            val child = childSpeaking()
+            val started = System.currentTimeMillis()
+            face.setMood(Mood.HAPPY)
+            say(intro ?: if (fresh) "Читаю «$title». Щоб зупинити, торкнись мене." else "Продовжую «$title».")
+            try {
+                while (chapter < book.chapters) {
+                    val text = try {
+                        withContext(Dispatchers.IO) { book.chapter(chapter).text }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "розділ ${chapter + 1} не прочитався: ${e.message}")
+                        ""
+                    }
+                    for (chunk in com.speedy.assistant.books.Sentences.chunks(com.speedy.assistant.books.Sentences.split(text), sentence)) {
+                        shelf.save(file, reader, Place(chapter, chunk.first, book.chapters, title))
+                        lastReadAt = SystemClock.uptimeMillis()
+                        if (waitingForTurn > 0) {
+                            Log.i(TAG, "читання на паузі: чекає нагадування")
+                            return
+                        }
+                        face.setMood(Mood.NEUTRAL)
+                        say(chunk.text)
+                    }
+                    chapter++
+                    sentence = 0
+                }
+                shelf.save(file, reader, Place(0, 0, book.chapters, title, finished = true))
+                face.setMood(Mood.HAPPY)
+                chirps.play(Chirp.HAPPY)
+                say("Кінець книги «$title».")
+            } finally {
+                lastReadAt = SystemClock.uptimeMillis()
+                if (child) childLimit?.add(reader ?: "дитина", System.currentTimeMillis() - started, System.currentTimeMillis())
             }
         }
     }
@@ -1161,5 +1356,9 @@ class Assistant(
         const val MAX_LOOKS = 3
         const val SETTLE_MS = 300L
         const val LAUNCH_CHECK_DELAY_MS = 5_000L
+        /** Просте "продовжуй" — про книгу, якщо читали протягом цього часу. */
+        const val BARE_CONTINUE_MS = 30 * 60_000L
+        const val MAX_LISTED = 6
+        const val BOOK_FORMATS = "EPUB, FB2 чи TXT"
     }
 }
