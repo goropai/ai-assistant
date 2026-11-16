@@ -228,7 +228,9 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { robot.rediscover() }
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         connectivity.registerDefaultNetworkCallback(networkCallback)
-        com.speedy.assistant.phone.NotificationStore.onNew = { note -> runOnUiThread { assistant?.announceNote(note) } }
+        // Спіді запустилась — усе, що вже на шторці, прочитане; читаємо лише ті, що прийдуть.
+        com.speedy.assistant.phone.NotificationStore.notes.markAllRead()
+        com.speedy.assistant.phone.NotificationStore.onNew = { runOnUiThread { assistant?.announceNotes() } }
         // Офлайн-слух: модель 78 МБ — завантажуємо лише через Wi-Fi (не мобільний трафік), один раз.
         lifecycleScope.launch {
             // Не вийшло (повільний сайт, немає Wi-Fi) — пробуємо знову кожні 10 хв; до того слухає Google.
@@ -257,6 +259,7 @@ class MainActivity : AppCompatActivity() {
             while (isActive) {
                 delay(20_000)
                 reminders.takeDue(System.currentTimeMillis()).forEach { assistant?.remind(it) }
+                assistant?.announceNotes() // відкладені (Спіді була зайнята / вночі)
             }
         }
         lifecycleScope.launch {

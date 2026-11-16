@@ -799,14 +799,22 @@ class Assistant(
                 say("Відкриваю спеціальні можливості. Увімкни службу «Спіді». У банківських застосунках і налаштуваннях я нічого не натискатиму.")
                 openAccessSettings("hands")
             }
-            com.speedy.assistant.phone.HandsCommand.News, com.speedy.assistant.phone.HandsCommand.ReadNotes -> {
-                val notes = com.speedy.assistant.phone.NotificationStore.recent(5)
-                when {
-                    notes.isEmpty() -> say("Нових сповіщень немає. Якщо я їх не бачу — скажи «дозволь читати сповіщення».")
-                    cmd == com.speedy.assistant.phone.HandsCommand.News ->
-                        say("Останні: " + notes.joinToString("; ") { "${it.app}${it.title.takeIf { t -> t.isNotBlank() }?.let { t -> " від $t" }.orEmpty()}" } + ". Прочитати?")
-                    else -> say(notes.take(3).joinToString(". ") { "${it.app}, ${it.title}: ${it.text}" })
+            com.speedy.assistant.phone.HandsCommand.News -> {
+                val unread = com.speedy.assistant.phone.NotificationStore.notes.unread()
+                if (unread.isEmpty()) {
+                    say("Нового нічого.")
+                } else {
+                    say("${notesCount(unread.size)}: ${whoFrom(unread)}. Прочитати?")
+                    com.speedy.assistant.phone.NotificationStore.notes.markRead(unread.map { it.key })
                 }
+            }
+            com.speedy.assistant.phone.HandsCommand.ReadNotes -> {
+                val store = com.speedy.assistant.phone.NotificationStore.notes
+                // Непрочитані, а якщо їх немає — останні (пряме прохання).
+                val notes = store.unread().take(3).ifEmpty { store.recent(3) }
+                if (notes.isEmpty()) say("Сповіщень немає. Якщо я їх не бачу — скажи «дозволь читати сповіщення».")
+                else say(notes.joinToString(". ") { "${it.app}, ${it.title}: ${it.text}" })
+                store.markRead(notes.map { it.key })
             }
             else -> {
                 if (hands == null) return say("Я ще не можу керувати телефоном. Скажи «дозволь керувати телефоном».")
@@ -838,20 +846,38 @@ class Assistant(
         }
     }
 
-    private var lastNoteAnnounced = 0L
+    private var lastNoteAnnounced = Long.MIN_VALUE / 2
 
-    /** Нове сповіщення: коротко "Повідомлення у Viber від мами" — без тексту (його — на прохання). */
-    fun announceNote(note: com.speedy.assistant.phone.Note) {
+    /**
+     * Нові сповіщення — коротко, хто й звідки (без тексту): "Нове повідомлення у Viber від мами"
+     * або разом, якщо їх кілька. Після цього — прочитані. Поки Спіді зайнята, вночі чи щойно
+     * повідомляла — чекають (виклик повторюється). Банківські вголос не озвучуємо.
+     */
+    fun announceNotes() {
         val now = SystemClock.uptimeMillis()
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
         if (busy || now - lastNoteAnnounced < 60_000 || hour < 8 || hour >= 22) return
-        if (com.speedy.assistant.phone.Safety.blocked("", note.app)) return // банки — не вголос
+        val fresh = com.speedy.assistant.phone.NotificationStore.notes.unread()
+            .filterNot { com.speedy.assistant.phone.Safety.blocked("", it.app) }
+        if (fresh.isEmpty()) return
         lastNoteAnnounced = now
+        com.speedy.assistant.phone.NotificationStore.notes.markRead(fresh.map { it.key })
         runBusy {
             chirps.play(Chirp.ATTENTION)
-            say("Повідомлення у ${note.app}${note.title.takeIf { it.isNotBlank() }?.let { " від $it" }.orEmpty()}.")
+            say(
+                if (fresh.size == 1) "Нове повідомлення у ${whoFrom(fresh)}."
+                else "${notesCount(fresh.size)}: ${whoFrom(fresh)}."
+            )
         }
     }
+
+    /** "Viber від мами, Telegram від Кості" (до 4, решта — "і ще N"). */
+    private fun whoFrom(notes: List<com.speedy.assistant.phone.Note>): String {
+        val parts = notes.take(4).map { n -> n.app + (n.title.takeIf { it.isNotBlank() }?.let { " від $it" } ?: "") }
+        return parts.joinToString(", ") + if (notes.size > 4) " і ще ${notes.size - 4}" else ""
+    }
+
+    private fun notesCount(n: Int) = "У тебе $n ${com.speedy.assistant.english.EnglishLesson.plural(n, "нове повідомлення", "нові повідомлення", "нових повідомлень")}"
 
     /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */
     private fun partner(): String? = people?.speaker(SystemClock.uptimeMillis())
