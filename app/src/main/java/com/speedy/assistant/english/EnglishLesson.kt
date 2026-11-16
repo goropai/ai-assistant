@@ -84,7 +84,7 @@ class EnglishLesson(
                 io.say("«${word.uk.first()}»?")
                 val heard = io.listen(english = true)
                 if (control(heard)) break
-                if (heard != null && Answers.matches(heard.texts, listOf(word.en))) correct++
+                if (heard != null && Answers.matches(heard.texts, vocabulary.englishFor(word.uk.first()))) correct++
             }
             if (stopped || correct < 2) break
             passed = level
@@ -191,7 +191,7 @@ class EnglishLesson(
             if (toEnglish) io.say("Як англійською «${word.uk.first()}»?") else { io.say("Що означає"); io.sayEnglish(word.en) }
             val heard = io.listen(english = toEnglish)
             if (control(heard)) return
-            val ok = heard != null && Answers.matches(heard.texts, if (toEnglish) listOf(word.en) else word.uk)
+            val ok = heard != null && Answers.matches(heard.texts, if (toEnglish) vocabulary.englishFor(word.uk.first()) else word.uk)
             total++
             if (ok) { score++; io.cheer(); io.say(listOf("Так!", "Правильно!", "Супер!").random()) }
             else { io.say("Правильно —"); if (toEnglish) io.sayEnglish(word.en) else io.say(word.uk.first()) }

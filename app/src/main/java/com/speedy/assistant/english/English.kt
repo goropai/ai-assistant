@@ -37,6 +37,9 @@ class Vocabulary(words: List<Word>) {
     fun words(level: Level): List<Word> = byLevel[level].orEmpty()
     fun find(en: String): Word? = byLevel.values.flatten().firstOrNull { it.en == en }
 
+    /** Усі англійські слова з таким перекладом: "позичати" — і borrow, і lend (обидва правильні). */
+    fun englishFor(uk: String): List<String> = byLevel.values.flatten().filter { uk in it.uk }.map { it.en }
+
     companion object {
         fun parse(json: String): Vocabulary {
             val arr = JSONArray(json)
