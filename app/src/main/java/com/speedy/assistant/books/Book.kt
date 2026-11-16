@@ -26,7 +26,7 @@ class NoTextException : Exception()
 
 object Books {
     /** Які файли вважаємо книгами (".fb2.zip" — за останнім розширенням "zip", див. [isBook]). */
-    val EXTENSIONS = setOf("txt", "fb2", "epub")
+    val EXTENSIONS = setOf("txt", "fb2", "epub", "pdf")
 
     fun isBook(file: File): Boolean {
         val name = file.name.lowercase()
@@ -38,6 +38,7 @@ object Books {
         val name = file.name.lowercase()
         return when {
             name.endsWith(".epub") -> EpubBook(file)
+            name.endsWith(".pdf") -> PdfBook(file)
             name.endsWith(".fb2") -> Fb2Book.parse(file.readBytes())
             name.endsWith(".fb2.zip") -> ZipFile(file).use { zip ->
                 val entry = zip.entries().asSequence().firstOrNull { it.name.lowercase().endsWith(".fb2") }

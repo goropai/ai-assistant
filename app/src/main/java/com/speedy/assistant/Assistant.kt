@@ -988,7 +988,7 @@ class Assistant(
             throw e
         } catch (e: com.speedy.assistant.books.NoTextException) {
             face.setMood(Mood.SAD)
-            return say("У книзі «${shelf.title(file)}» немає тексту, який я можу прочитати.")
+            return say("У книзі «${shelf.title(file)}» немає тексту, який я можу прочитати. Мабуть, це скан, а розпізнавати текст на сторінках я ще не вмію.")
         } catch (e: Exception) {
             Log.w(TAG, "книга ${file.path}: ${e.message}")
             face.setMood(Mood.SAD)
@@ -1359,6 +1359,6 @@ class Assistant(
         /** Просте "продовжуй" — про книгу, якщо читали протягом цього часу. */
         const val BARE_CONTINUE_MS = 30 * 60_000L
         const val MAX_LISTED = 6
-        const val BOOK_FORMATS = "EPUB, FB2 чи TXT"
+        const val BOOK_FORMATS = "EPUB, FB2, PDF чи TXT"
     }
 }

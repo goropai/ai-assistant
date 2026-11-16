@@ -101,6 +101,13 @@ class BooksTest {
         }
     }
 
+    @Test
+    fun pdfPageLinesBecomeParagraphs() {
+        val page = "Розділ перший.\nЖили собі дід та ба-\nба, і була в них\nкурочка Ряба.\n17\nНовий абзац."
+        assertEquals("Розділ перший.\nЖили собі дід та баба, і була в них курочка Ряба.\nНовий абзац.", com.speedy.assistant.books.PdfBook.clean(page))
+        assertTrue(Books.isBook(File("Statement.PDF")))
+    }
+
     @Test(expected = NoTextException::class)
     fun fb2WithoutBody() {
         Fb2Book.parse("<FictionBook><description/></FictionBook>".toByteArray())

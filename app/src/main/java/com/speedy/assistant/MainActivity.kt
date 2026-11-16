@@ -161,6 +161,8 @@ class MainActivity : AppCompatActivity() {
         profilesRef = profiles
         peopleRef = people
         val pets = com.speedy.assistant.vision.Pets(java.io.File(filesDir, "pets.json"))
+        // PDFBox бере шрифти й таблиці гліфів із ресурсів застосунку (для тексту PDF-книг).
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
         presence = PresenceWatcher(this, this, people, pets, profiles) { events -> assistant?.onPresence(events) }
 
         assistant = Assistant(

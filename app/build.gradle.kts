@@ -124,6 +124,8 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     // Пошук облич у кадрі (модель вбудована в APK, працює офлайн); відбитки — MobileFaceNet у assets.
     implementation("com.google.mlkit:face-detection:16.1.7")
+    // Текст із PDF для читання книг вголос (вбудований PdfRenderer уміє лише малювати сторінки).
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     testImplementation("junit:junit:4.13.2")
     // Справжній org.json для JVM-тестів (в android.jar лише заглушки).
