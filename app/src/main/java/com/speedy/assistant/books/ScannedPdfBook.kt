@@ -26,6 +26,10 @@ class ScannedPdfBook(file: File, private val ocr: Ocr, cacheRoot: File) : Book {
     private val cache = File(cacheRoot, key(file)).apply { mkdirs() }
     private val pending = ConcurrentHashMap<Int, Future<String>>()
     @Volatile private var closed = false
+    private val langFile = File(cache, "lang")
+    /** Мова книги (визначена на першій сторінці з текстом); null — ще не відомо. */
+    @Volatile var language: Lang? = runCatching { Lang.valueOf(langFile.readText().trim()) }.getOrNull()
+        private set
 
     override val title: String? = null
     override val chapters = renderer.pageCount
@@ -60,8 +64,17 @@ class ScannedPdfBook(file: File, private val ocr: Ocr, cacheRoot: File) : Book {
                     p.render(it, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                 }
             }
-            val text = try { PdfBook.clean(ocr.recognize(bitmap)) } finally { bitmap.recycle() }
+            val langs = language?.let(Ocr::langsFor) ?: Ocr.ALL
+            val text = try { PdfBook.clean(ocr.recognize(bitmap, langs)) } finally { bitmap.recycle() }
             if (closed) return "" // перервано — неповне в кеш не пишемо
+            // Мова книги — за першою сторінкою, де досить тексту; далі лише її словники (швидше).
+            if (language == null && text.count { it.isLetter() } >= LANG_SAMPLE) {
+                Lang.detect(text)?.let { lang ->
+                    language = lang
+                    langFile.writeText(lang.name)
+                    Log.i(TAG, "мова скану: $lang")
+                }
+            }
             cached(index).writeText(text)
             Log.i(TAG, "сторінка ${index + 1}/$chapters: ${text.length} симв. за ${System.currentTimeMillis() - started} мс")
             return text
@@ -88,6 +101,8 @@ class ScannedPdfBook(file: File, private val ocr: Ocr, cacheRoot: File) : Book {
         private const val DPI = 300f
         /** Довша сторона сторінки, пікселів: більше — повільніше й не влізе в пам'ять J5. */
         private const val MAX_SIDE = 2400f
+        /** Скільки літер треба, щоб упевнено визначити мову (титульна сторінка — замало). */
+        private const val LANG_SAMPLE = 300
 
         /** Тека кешу — за шляхом, розміром і датою файлу (змінився файл — розпізнаємо заново). */
         fun key(file: File): String = MessageDigest.getInstance("SHA-1")

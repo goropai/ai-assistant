@@ -7,17 +7,19 @@ import java.io.File
 data class Place(val chapter: Int, val sentence: Int, val chapters: Int = 0, val title: String = "", val finished: Boolean = false)
 
 /**
- * Книги в пам'яті телефона й на картці: шукаємо, коли попросили почитати (не заздалегідь),
- * по всьому сховищу, крім службових тек. Місце читання — у files/books.json: одне на книгу,
- * а ще — остання книга кожного, хто слухав (і остання взагалі).
+ * Книги в пам'яті телефона й на картці (див. [StorageScan]). Місце читання — у files/books.json:
+ * одне на книгу, а ще — остання книга кожного, хто слухав (і остання взагалі).
  */
 class Bookshelf(
-    private val roots: () -> List<File>,
+    private val storage: StorageScan,
     private val progressFile: File?,
-    private val isBook: (File) -> Boolean = Books::isBook,
     /** PDF без тексту — розпізнавання сторінок (null — сканів не читаємо). */
     val scans: ScanReader? = null,
 ) {
+    /** Окремий обхід лише книг (тести, або коли медіа не потрібні). */
+    constructor(roots: () -> List<File>, progressFile: File?, scans: ScanReader? = null) :
+        this(StorageScan(roots) { isBookFile(it) }, progressFile, scans)
+
     /**
      * Відкрити книгу; PDF-скан — через розпізнавання.
      * @throws NoTextException тексту немає й розпізнати нічим; [OcrNotReadyException] — спершу [ScanReader.prepare].
@@ -29,8 +31,6 @@ class Bookshelf(
         scans.open(file)
     }
 
-    private var cache: List<File> = emptyList()
-    private var cachedAt = Long.MIN_VALUE / 2
     private val places = mutableMapOf<String, Place>()
     private val lastOf = mutableMapOf<String, String>()
 
@@ -52,30 +52,7 @@ class Bookshelf(
     }
 
     /** Усі книги (повільно: обхід сховища; результат живе кілька хвилин). Викликати не в головному потоці. */
-    @Synchronized
-    fun all(now: Long = System.currentTimeMillis()): List<File> {
-        if (now - cachedAt < CACHE_MS) return cache
-        val found = mutableListOf<File>()
-        val seen = mutableSetOf<String>()
-        val started = System.currentTimeMillis()
-        val queue = ArrayDeque(roots().filter { it.isDirectory }.map { it to 0 })
-        while (queue.isNotEmpty() && System.currentTimeMillis() - started < SCAN_BUDGET_MS) {
-            val (dir, depth) = queue.removeFirst()
-            val real = runCatching { dir.canonicalPath }.getOrDefault(dir.path)
-            if (!seen.add(real)) continue // та сама тека іншим шляхом (/sdcard, /storage/emulated/0)
-            for (f in dir.listFiles().orEmpty()) {
-                if (f.name.startsWith('.')) continue
-                if (f.isDirectory) {
-                    if (depth < MAX_DEPTH && !skipDir(f)) queue.addLast(f to depth + 1)
-                } else if (isBook(f) && (!f.name.endsWith(".txt", ignoreCase = true) || f.length() >= MIN_TXT_BYTES)) {
-                    found += f
-                }
-            }
-        }
-        cache = found.distinctBy { runCatching { it.canonicalPath }.getOrDefault(it.path) }
-        cachedAt = now
-        return cache
-    }
+    fun all(now: Long = System.currentTimeMillis()): List<File> = storage.files(now).filter(::isBookFile)
 
     /** Книга за сказаною назвою (українською чи латиницею в імені файлу); null — нічого схожого. */
     fun find(query: String): File? = findKnown(query) ?: best(query, all())
@@ -120,21 +97,13 @@ class Bookshelf(
         f.writeText(JSONObject().put("books", books).put("last", JSONObject(lastOf as Map<*, *>)).toString())
     }
 
-    private fun skipDir(dir: File): Boolean {
-        val name = dir.name.lowercase()
-        if (name in SKIP) return true
-        // Android/data, Android/obb — дані застосунків (і закриті на новіших Android).
-        return dir.parentFile?.name.equals("Android", ignoreCase = true) && name in setOf("data", "obb", "media")
-    }
-
     companion object {
         const val ANYONE = "*"
-        private const val CACHE_MS = 5 * 60_000L
-        private const val SCAN_BUDGET_MS = 15_000L
-        private const val MAX_DEPTH = 12
         /** Менші TXT — журнали, ліцензії, нотатки, а не книги. */
         private const val MIN_TXT_BYTES = 20_000L
-        private val SKIP = setOf("cache", ".thumbnails", "thumbnails", "log", "logs", "lost.dir", "dcim")
+
+        fun isBookFile(f: File): Boolean =
+            Books.isBook(f) && (!f.name.endsWith(".txt", ignoreCase = true) || f.length() >= MIN_TXT_BYTES)
 
         /** Найкраще збігання назви: частка слів запиту, знайдених у назві файлу (з транслітерацією). */
         fun best(query: String, files: List<File>, minScore: Double = 0.5, titleOf: (File) -> String = Books::titleFromName): File? {
@@ -150,17 +119,37 @@ class Bookshelf(
         private fun score(query: List<String>, title: List<String>): Double =
             query.count { w -> title.any { similar(w, it) } }.toDouble() / query.size
 
-        /** Слова збігаються, якщо однаково починаються (відмінки: "Кобзаря" ~ "Kobzar"). */
+        /**
+         * Слова збігаються, якщо однаково починаються (відмінки: "Кобзаря" ~ "Kobzar") або однаково
+         * звучать приголосні: англійська назва, почута українською ("клін код" ~ "Clean Code",
+         * "пітон" ~ "Python") — голосні розпізнавач і англійське письмо передають по-різному.
+         */
         private fun similar(a: String, b: String): Boolean {
             if (a.toIntOrNull() != null || b.toIntOrNull() != null) return a == b
+            if (a.length < 2 || b.length < 2) return false
             val n = minOf(4, a.length, b.length)
-            return n >= 2 && a.length >= 2 && b.length >= 2 && a.take(n) == b.take(n) && (n == 4 || a == b)
+            if (a.take(n) == b.take(n) && (n == 4 || a == b)) return true
+            val sa = skeleton(a)
+            val sb = skeleton(b)
+            val m = minOf(sa.length, sb.length)
+            return if (m < 3) m >= 1 && sa == sb else sa.take(3) == sb.take(3)
         }
 
-        /** Слова назви латиницею, у спрощеному вигляді (h=g, y=i: "Гаррі" і "Harry" — одне слово). */
+        /** Приголосні без повторів: "potter" → "ptr", "dzgavaskript" → "dzgvskrpt". */
+        private fun skeleton(w: String): String =
+            w.filter { it !in "aeiou" }.replace(Regex("(.)\\1+"), "$1")
+
+        /**
+         * Слова назви латиницею, у спрощеному вигляді, однаковому для транслітерації й англійського
+         * письма: h=g ("Гаррі" ~ "Harry"), y=i, c=k/s ("code" ~ "код"), j=дж ("Java" ~ "джава").
+         */
         fun words(s: String): List<String> =
-            translit(s.lowercase()).split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }
-                .map { it.replace("kh", "h").replace('h', 'g').replace('y', 'i').replace('j', 'i').replace('w', 'v') }
+            translit(s.lowercase()).split(Regex("[^a-z0-9]+")).filter { it.isNotEmpty() }.map { w ->
+                w.replace("kh", "h").replace("ph", "f").replace("th", "t").replace("ck", "k").replace("qu", "kv")
+                    .replace(Regex("c(?=[eiy])"), "s").replace(Regex("c(?!h)"), "k")
+                    .replace("q", "k").replace("x", "ks").replace("j", "dzh")
+                    .replace('h', 'g').replace('y', 'i').replace('w', 'v')
+            }
 
         private fun translit(s: String): String = buildString {
             for (c in s) append(LATIN[c] ?: c.toString())
@@ -175,6 +164,6 @@ class Bookshelf(
         )
 
         /** Слова з прохання, яких у назві немає: "почитай мені ту книжку про…". */
-        private val FILLER = words("про книгу книжку книжечку книга ту цю оцю мені нам будь ласка вголос").toSet()
+        private val FILLER = words("про книгу книжку книжечку книга ту цю оцю мені нам будь ласка вголос фільм фільми мультик серіал аудіокнигу").toSet()
     }
 }

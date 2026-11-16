@@ -89,21 +89,34 @@ class Speaker(
     /** Промовляє текст і повертається, коли мовлення завершилось. */
     private var ukrainianVoice: android.speech.tts.Voice? = null
 
-    /** @param english — англійським голосом (уроки англійської), потім назад український. */
-    suspend fun speak(text: String, english: Boolean = false) {
+    /** Мова, якою синтезатор зараз налаштований (перемикаємо лише при зміні — книги говорять фрагментами). */
+    private var current: Locale = UKRAINIAN
+
+    /**
+     * @param english — англійським голосом (уроки англійської).
+     * @param locale — мовою книги (англійська, російська); немає такого голосу — українським.
+     */
+    suspend fun speak(text: String, english: Boolean = false, locale: Locale? = null) {
         if (text.isBlank() || !ready.await()) return
-        if (english) {
-            val r = tts.setLanguage(Locale.US)
-            if (r < TextToSpeech.LANG_AVAILABLE) Log.w(TAG, "Англійська недоступна в синтезаторі ($r)")
+        val wanted = locale ?: if (english) Locale.US else UKRAINIAN
+        if (!use(wanted)) use(UKRAINIAN)
+        speakNow(text)
+    }
+
+    /** Чи є голос цієї мови в синтезаторі (інакше книгу читатиме український голос). */
+    suspend fun supports(locale: Locale): Boolean =
+        ready.await() && tts.isLanguageAvailable(locale) >= TextToSpeech.LANG_AVAILABLE
+
+    private fun use(locale: Locale): Boolean {
+        if (locale == current) return true
+        val r = tts.setLanguage(locale)
+        if (r < TextToSpeech.LANG_AVAILABLE) {
+            Log.w(TAG, "Мова $locale недоступна в синтезаторі ($r)")
+            return false
         }
-        try {
-            speakNow(text)
-        } finally {
-            if (english) {
-                tts.setLanguage(Locale("uk", "UA"))
-                ukrainianVoice?.let { tts.voice = it }
-            }
-        }
+        if (locale == UKRAINIAN) ukrainianVoice?.let { tts.voice = it }
+        current = locale
+        return true
     }
 
     private suspend fun speakNow(text: String) {
@@ -126,5 +139,6 @@ class Speaker(
 
     private companion object {
         const val TAG = "Speaker"
+        val UKRAINIAN = Locale("uk", "UA")
     }
 }

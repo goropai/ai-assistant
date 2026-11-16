@@ -109,13 +109,13 @@ object Markup {
         Regex("(?i)\\b$name\\s*=\\s*([\"'])(.*?)\\1").find(tag)?.groupValues?.get(2)?.let(::unescape)
 }
 
-/** TXT: розділи за рядками "Розділ 3", "Глава 1", "Chapter 2"; немає таких — частини по ~15 тис. символів. */
+/** TXT: розділи за рядками "Розділ 3", "Глава 1", "Часть 2", "Chapter 2"; немає таких — частини по ~15 тис. символів. */
 class TextBook(override val title: String?, private val parts: List<Chapter>) : Book {
     override val chapters get() = parts.size
     override fun chapter(index: Int) = parts[index]
 
     companion object {
-        private val heading = Regex("(?iu)^(розділ|глава|частина|chapter|part)\\s+[\\p{L}\\d]+.{0,50}$")
+        private val heading = Regex("(?iu)^(розділ|глава|частина|часть|раздел|chapter|part)\\s+[\\p{L}\\d]+.{0,50}$")
         private const val PART = 15_000
 
         fun parse(text: String, title: String? = null): TextBook {

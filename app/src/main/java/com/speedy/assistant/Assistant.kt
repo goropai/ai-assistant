@@ -34,6 +34,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.speedy.assistant.books.BookCommand
 import com.speedy.assistant.books.Books
+import com.speedy.assistant.books.Lang
 import com.speedy.assistant.books.Place
 import java.io.File
 
@@ -996,7 +997,7 @@ class Assistant(
             attempt { shelf.open(file) }
         } catch (e: com.speedy.assistant.books.OcrNotReadyException) {
             val scans = shelf.scans ?: return null
-            say("«$title» — це скан. Щоб розпізнавати сторінки, мені треба завантажити словник, це чотири мегабайти. Хвилинку.")
+            say("«$title» — це скан. Щоб розпізнавати сторінки, мені треба завантажити словники українською, російською й англійською, це ${scans.downloadMb} ${com.speedy.assistant.english.EnglishLesson.plural(scans.downloadMb, "мегабайт", "мегабайти", "мегабайтів")}. Хвилинку.")
             face.setMood(Mood.THINKING)
             try {
                 scans.prepare()
@@ -1046,6 +1047,9 @@ class Assistant(
             // Скан: пояснюємо один раз, далі — коротко, коли сторінку доводиться чекати.
             var explained = fresh && book.scanned
             if (explained) say("Це скан: кожну сторінку я спершу розглядаю, тож буде трохи повільніше.")
+            var chapterLang: Lang? = null
+            /** Про відсутній голос мови кажемо раз на книгу. */
+            val warned = mutableSetOf<Lang>()
             try {
                 while (chapter < book.chapters) {
                     if ((book as? com.speedy.assistant.books.ScannedPdfBook)?.isReady(chapter) == false) {
@@ -1062,6 +1066,9 @@ class Assistant(
                         Log.w(TAG, "розділ ${chapter + 1} не прочитався: ${e.message}")
                         ""
                     }
+                    // Мова розділу — за всім його текстом; фрагмента — за ним самим (код англійською
+                    // в російській книзі), а короткий / неясний — мовою розділу.
+                    chapterLang = Lang.detect(text, chapterLang) ?: chapterLang
                     for (chunk in com.speedy.assistant.books.Sentences.chunks(com.speedy.assistant.books.Sentences.split(text), sentence)) {
                         shelf.save(file, reader, Place(chapter, chunk.first, book.chapters, title))
                         lastReadAt = SystemClock.uptimeMillis()
@@ -1070,7 +1077,7 @@ class Assistant(
                             return
                         }
                         face.setMood(Mood.NEUTRAL)
-                        say(chunk.text)
+                        sayIn(chunk.text, Lang.detect(chunk.text, chapterLang) ?: Lang.UK, warned)
                     }
                     chapter++
                     sentence = 0
@@ -1364,6 +1371,27 @@ class Assistant(
     private suspend fun speak(reply: AgentReply) {
         face.setMood(reply.mood)
         say(reply.say)
+    }
+
+    /**
+     * Текст книги голосом її мови. Немає такого голосу в синтезаторі — українським, і раз на книгу
+     * про це скажемо ([warned] — про які мови вже сказали).
+     */
+    private suspend fun sayIn(text: String, lang: Lang, warned: MutableSet<Lang>) {
+        if (lang == Lang.UK) return say(text)
+        if (!voice.supports(lang.locale)) {
+            if (warned.add(lang)) {
+                Log.w(TAG, "немає голосу $lang")
+                say("У мене немає ${lang.spoken} голосу, тож читатиму українським. Його можна додати в синтезаторі мовлення, наприклад у RHVoice.")
+            }
+            return say(text)
+        }
+        face.setSpeaking(true)
+        try {
+            voice.speak(text, locale = lang.locale)
+        } finally {
+            face.setSpeaking(false)
+        }
     }
 
     private suspend fun say(text: String) {

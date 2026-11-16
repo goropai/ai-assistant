@@ -5,6 +5,7 @@ import com.speedy.assistant.books.BookCommands
 import com.speedy.assistant.books.Books
 import com.speedy.assistant.books.Bookshelf
 import com.speedy.assistant.books.Fb2Book
+import com.speedy.assistant.books.Lang
 import com.speedy.assistant.books.NoTextException
 import com.speedy.assistant.books.Place
 import com.speedy.assistant.books.Sentences
@@ -112,6 +113,7 @@ class BooksTest {
     fun scannedFallbackOnlyForPdfWithoutText() {
         val opened = mutableListOf<String>()
         val scans = object : com.speedy.assistant.books.ScanReader {
+            override val downloadMb = 0
             override fun open(file: File): com.speedy.assistant.books.Book {
                 opened += file.name
                 throw com.speedy.assistant.books.OcrNotReadyException()
@@ -167,6 +169,29 @@ class BooksTest {
         // Інша частина: прочитана підходить лише частково — шукаємо по сховищу.
         assertEquals(chamber, shelf.find("гаррі поттер і таємна кімната"))
         assertTrue(scanned)
+    }
+
+    @Test
+    fun detectsLanguage() {
+        assertEquals(Lang.EN, Lang.detect("The quick brown fox jumps over the lazy dog."))
+        assertEquals(Lang.UK, Lang.detect("Їжак ішов лісом і співав пісню."))
+        assertEquals(Lang.RU, Lang.detect("Съешь же ещё этих мягких французских булок."))
+        // Російська книга з кодом: фрагмент коду — англійською, рядок без "своїх" літер — мовою розділу.
+        assertEquals(Lang.EN, Lang.detect("val list = mutableListOf<String>()", Lang.RU))
+        assertEquals(Lang.RU, Lang.detect("Рассмотрим функцию map", Lang.RU))
+        assertNull(Lang.detect("42 + 7"))
+    }
+
+    @Test
+    fun englishTitlesHeardInUkrainian() {
+        val root = tmp.newFolder("tech")
+        listOf("Clean_Code.pdf", "Learning_Python_5th_Edition.pdf", "JavaScript.The.Definitive.Guide.epub", "Kotlin_in_Action.pdf")
+            .forEach { File(root, it).writeText("x") }
+        val shelf = Bookshelf({ listOf(root) }, null)
+        assertEquals("Clean_Code.pdf", shelf.find("клін код")?.name)
+        assertEquals("Learning_Python_5th_Edition.pdf", shelf.find("пітон")?.name)
+        assertEquals("JavaScript.The.Definitive.Guide.epub", shelf.find("джаваскрипт")?.name)
+        assertEquals("Kotlin_in_Action.pdf", shelf.find("котлін ін екшн")?.name)
     }
 
     @Test
