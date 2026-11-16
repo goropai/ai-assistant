@@ -156,6 +156,12 @@ class FacesTest {
         val people = People(FaceBook(null).apply { remember("Костя", listOf(adult)); remember("Каву", listOf(child)) })
         assertEquals("Костя", people.findName("костю"))
         assertEquals("Каву", people.findName("каву"))
+        val people2 = People(FaceBook(null).apply { remember("Ніна", listOf(adult)); remember("Микита", listOf(child)) })
+        assertEquals("Ніна", people2.findName("Ніну"))
+        assertEquals("Микита", people2.findName("Мікіта"))
+        // Імена-звертання до Спіді прибираються самі.
+        val people3 = People(FaceBook(null).apply { remember("Спіть", listOf(adult)); remember("Тарас", listOf(child)) })
+        assertEquals(listOf("Тарас"), people3.names())
         // Звичайні фрази з "не" — не виправлення імені.
         assertEquals(null, LocalCommands.parseCorrection("ні котики не п'ють каву"))
         assertEquals(null, LocalCommands.parseCorrection("я не в червоному"))

@@ -58,10 +58,42 @@ class People(private val book: FaceBook) {
     /** Знайоме ім'я, схоже на сказане з урахуванням відмінка ("Костю" → "Костя"). */
     @Synchronized
     fun findName(spoken: String): String? {
-        val s = spoken.lowercase()
-        book.names.firstOrNull { it.lowercase() == s }?.let { return it }
-        val stem = if (s.length > 3) s.dropLast(1) else s
-        return book.names.filter { it.lowercase().startsWith(stem) }.singleOrNull()
+        val s = soundKey(spoken)
+        book.names.firstOrNull { soundKey(it) == s }?.let { return it }
+        // Відмінок: "Костю" → "Костя" (основа без останньої літери).
+        val stem = if (s.length >= 3) s.dropLast(1) else s
+        book.names.filter { soundKey(it).startsWith(stem) }.singleOrNull()?.let { return it }
+        // Розпізнавач пише інакше ("Спіть" → "спить"): одна відмінна літера для імен від 4 літер.
+        return book.names.filter { s.length >= 4 && distance(soundKey(it), s) <= 1 }.singleOrNull()
+    }
+
+    init {
+        // Імена, які насправді звертання до самої Спіді (офлайн-слух чув "Спіді" як "спіть"), — прибрати.
+        book.names.filter { soundKey(it) in WAKE_LIKE }.forEach { book.forget(it) }
+    }
+
+    companion object {
+        private val WAKE_LIKE = setOf("спіді", "спід", "спіть", "спікер", "speedy").map { soundKey(it) }.toSet()
+
+        /** Звучання без дрібниць написання: і/и/ї/i, е/є, г/ґ, апостроф. */
+        fun soundKey(name: String): String = name.lowercase()
+            .replace('ї', 'і').replace('и', 'і').replace('i', 'і')
+            .replace('є', 'е').replace('ґ', 'г')
+            .filter { it.isLetter() }
+
+        private fun distance(a: String, b: String): Int {
+            val dp = IntArray(b.length + 1) { it }
+            for (i in 1..a.length) {
+                var prev = dp[0]
+                dp[0] = i
+                for (j in 1..b.length) {
+                    val tmp = dp[j]
+                    dp[j] = minOf(dp[j] + 1, dp[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
+                    prev = tmp
+                }
+            }
+            return dp[b.length]
+        }
     }
 
     /**
