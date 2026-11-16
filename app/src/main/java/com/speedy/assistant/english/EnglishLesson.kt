@@ -31,6 +31,9 @@ class EnglishLesson(
     private val child: Boolean? = null,
 ) {
     private var stopped = false
+    /** Підсумок уроку (для логу). */
+    var result: String = ""
+        private set
     private var silences = 0
     private var score = 0
     private var total = 0
@@ -82,7 +85,9 @@ class EnglishLesson(
             var correct = 0
             for (word in vocabulary.words(level).shuffled().take(2)) {
                 io.say("«${word.uk.first()}»?")
-                val heard = io.listen(english = true)
+                var heard = io.listen(english = true)
+                // Не почула (розпізнавач нічого не повернув) — питаємо ще раз, а не рахуємо помилкою.
+                if (heard == null) { io.say("Не почула. «${word.uk.first()}»?"); heard = io.listen(english = true) }
                 if (control(heard)) break
                 if (heard != null && Answers.matches(heard.texts, vocabulary.englishFor(word.uk.first()))) correct++
             }
@@ -241,7 +246,8 @@ class EnglishLesson(
             else "Може, трохи спростимо — рівень «${advice.ua}»? Скажи «мій рівень англійської — ${advice.ua}»."
         }
         if (score * 2 >= total) io.cheer()
-        io.say(parts.joinToString(" "))
+        result = parts.joinToString(" ")
+        io.say(result)
     }
 
     companion object {

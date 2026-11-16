@@ -245,7 +245,21 @@ object Answers {
     /** "to look forward to" — без "to" спереду теж правильно. */
     private fun stripTo(s: String) = s.removePrefix("to ").trim()
 
-    fun clean(s: String) = s.lowercase().replace('’', '\'').replace(Regex("[^\\p{L}' ]"), " ").replace(Regex("\\s+"), " ").trim()
+    fun clean(s: String): String {
+        var t = s.lowercase().replace('’', '\'').replace(Regex("[^\\p{L}' ]"), " ").replace(Regex("\\s+"), " ").trim()
+        // "she's my friend" = "she is my friend": розгортаємо скорочення перед порівнянням.
+        for ((short, full) in CONTRACTIONS) t = t.replace(Regex("(?<![\\p{L}'])${Regex.escape(short)}(?![\\p{L}'])"), full)
+        return t
+    }
+
+    private val CONTRACTIONS = listOf(
+        "i'm" to "i am", "you're" to "you are", "we're" to "we are", "they're" to "they are",
+        "he's" to "he is", "she's" to "she is", "it's" to "it is", "that's" to "that is", "there's" to "there is",
+        "isn't" to "is not", "aren't" to "are not", "wasn't" to "was not", "don't" to "do not", "doesn't" to "does not",
+        "didn't" to "did not", "can't" to "can not", "cannot" to "can not", "won't" to "will not",
+        "i've" to "i have", "you've" to "you have", "we've" to "we have", "i'll" to "i will", "i'd" to "i would",
+        "you'll" to "you will", "let's" to "let us",
+    )
 
     private fun distance(a: String, b: String): Int {
         val dp = IntArray(b.length + 1) { it }

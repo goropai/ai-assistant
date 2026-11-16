@@ -686,10 +686,12 @@ class Assistant(
             else -> null
         }
         Log.i(TAG, "вік $name за обличчям: ${profiles?.age(name)} (очі ${profiles?.eyeLevel(name)})")
-        com.speedy.assistant.english.EnglishLesson(
+        val lesson = com.speedy.assistant.english.EnglishLesson(
             course.vocabulary, course.curriculum, course.progress, io, name,
             now = { System.currentTimeMillis() }, extra = course.store, generate = course.generate, child = child,
-        ).run()
+        )
+        lesson.run()
+        Log.i(TAG, "урок англійської завершено ($name, рівень ${course.progress.learner(name).level}): ${lesson.result}")
         face.setMood(Mood.HAPPY)
     }
 

@@ -74,6 +74,10 @@ class EnglishTest {
         assertTrue(Answers.matches(listOf("look forward to"), listOf("to look forward to")))
         assertTrue(Answers.matches(listOf("Кішка"), listOf("кіт", "кішка")))
         assertTrue(!Answers.matches(listOf("dog"), listOf("cat")))
+        // Скорочення = повна форма.
+        assertEquals("she is my friend", Answers.clean("She's my friend."))
+        assertEquals("i am not tired", Answers.clean("I'm not tired"))
+        assertTrue(Pronounce.score(Heard(listOf("she's my friend"), 0.95f), "She is my friend.").score >= 85)
     }
 
     @Test
