@@ -42,6 +42,18 @@ class OfflineEar(private val context: Context) {
     fun recognizer(): Recognizer? = model?.let { Recognizer(it, RATE.toFloat()).apply { setMaxAlternatives(3) } }
 
     private fun download(http: OkHttpClient) {
+        // Архів, покладений вручну (adb push у папку застосунку) — без інтернету.
+        val pushed = File(context.getExternalFilesDir(null), ZIP_NAME)
+        if (pushed.exists()) {
+            Log.i(TAG, "знайшла архів моделі на телефоні")
+            if (sha256(pushed) == SHA256) {
+                unzip(pushed)
+                pushed.delete()
+                return
+            }
+            Log.w(TAG, "архів на телефоні пошкоджений — завантажую")
+            pushed.delete()
+        }
         Log.i(TAG, "завантажую модель (${SIZE / 1_000_000} МБ)")
         val zip = File(context.cacheDir, "vosk-uk.zip")
         val digest = MessageDigest.getInstance("SHA-256")
@@ -68,6 +80,24 @@ class OfflineEar(private val context: Context) {
             zip.delete()
             throw IOException("Vosk: контрольна сума не збігається")
         }
+        unzip(zip)
+        zip.delete()
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private fun unzip(zip: File) {
         dir.deleteRecursively()
         dir.mkdirs()
         ZipInputStream(zip.inputStream()).use { z ->
@@ -81,7 +111,6 @@ class OfflineEar(private val context: Context) {
                 }
             }
         }
-        zip.delete()
         File(dir, READY_MARK).writeText(SHA256)
         Log.i(TAG, "модель розпакована")
     }
@@ -93,6 +122,8 @@ class OfflineEar(private val context: Context) {
         private const val SHA256 = "d6b50be0a2d20f891720f3a83c98290bb2d396fd666142dbf716e8ad302f8233"
         private const val SIZE = 77_622_640L
         private const val READY_MARK = ".ready"
+        /** Ім'я архіву для ручного встановлення: adb push … /sdcard/Android/data/<пакет>/files/ */
+        const val ZIP_NAME = "vosk-model-small-uk-v3-nano.zip"
 
         /** Варіанти розпізнаного тексту з результату Vosk (alternatives або text). */
         fun phrases(json: String): List<String> {
