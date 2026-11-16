@@ -105,6 +105,20 @@ class ProfilesTest {
     }
 
     @Test
+    fun ageByVoiceBeatsFace() {
+        val p = Profiles(null, utc)
+        // Обличчя за очима — "доросле" (у Ліни 0.40–0.49, як у тата), але голос дитячий.
+        repeat(6) { p.faceSample("Ліна", 0.42f, 0) }
+        assertEquals(Profiles.Age.UNKNOWN, p.age("Ліна"))
+        repeat(3) { p.voiceSample("Ліна", 310f, 0) }
+        assertEquals(Profiles.Age.CHILD, p.age("Ліна"))
+        repeat(3) { p.voiceSample("Тарас", 120f, 0) }
+        assertEquals(Profiles.Age.ADULT, p.age("Тарас"))
+        p.setAge("Тарас", Profiles.Age.CHILD) // сказане вголос — головне
+        assertEquals(Profiles.Age.CHILD, p.age("Тарас"))
+    }
+
+        @Test
     fun aboutMeCommand() {
         assertEquals(LocalCommand.ABOUT_ME, LocalCommands.match("що ти про мене знаєш?"))
         assertEquals(LocalCommand.ABOUT_ME, LocalCommands.match("що ти пам'ятаєш про мене"))

@@ -321,6 +321,7 @@ class Assistant(
         awaitingCommandUntil = 0
         lastInteraction = SystemClock.uptimeMillis()
         inConversation = true
+        noteVoice()
         runBusy { if (command.isBlank()) greet() else handle(command) }
     }
 
@@ -680,12 +681,13 @@ class Assistant(
             override suspend fun cheer() { face.setMood(Mood.HAPPY); chirps.play(Chirp.HAPPY) }
             override suspend fun oops() { face.setMood(Mood.THINKING) }
         }
+        // Вік: профіль (сказане вголос / голос / явно дитяче обличчя), інакше — голос щойно почутої фрази.
         val child = when (profiles?.age(name)) {
             com.speedy.assistant.people.Profiles.Age.CHILD -> true
             com.speedy.assistant.people.Profiles.Age.ADULT -> false
-            else -> null
+            else -> voiceSaysChild()
         }
-        Log.i(TAG, "вік $name за обличчям: ${profiles?.age(name)} (очі ${profiles?.eyeLevel(name)})")
+        Log.i(TAG, "вік $name: ${profiles?.age(name)} (очі ${profiles?.eyeLevel(name)}, голос ${profiles?.voiceHz(name)?.toInt()} Гц, щойно ${ears.lastPitchHz?.toInt()} Гц) → дитина=$child")
         val lesson = com.speedy.assistant.english.EnglishLesson(
             course.vocabulary, course.curriculum, course.progress, io, name,
             now = { System.currentTimeMillis() }, extra = course.store, generate = course.generate, child = child,
@@ -709,6 +711,24 @@ class Assistant(
         delay(VoiceListener.UNMUTE_DELAY_MS) // звук ще приглушений після розпізнавача
         Log.d(TAG, "урок почув (${if (english) "en" else "uk"}): $texts, впевненість ${ears.lastConfidence}")
         return texts?.let { com.speedy.assistant.english.Heard(it, ears.lastConfidence) }
+    }
+
+    /** Тон щойно почутої фрази (якщо свіжий) — у профіль того, хто говорить. */
+    private fun noteVoice() {
+        val hz = ears.lastPitchHz?.takeIf { SystemClock.uptimeMillis() - ears.lastPitchAt < 15_000 } ?: return
+        val name = partner() ?: return
+        profiles?.voiceSample(name, hz, System.currentTimeMillis())
+        Log.d(TAG, "голос $name: ${hz.toInt()} Гц (середнє ${profiles?.voiceHz(name)?.toInt()})")
+    }
+
+    /** Свіжий тон голосу каже "дитина"? (для уроку, коли людина ще незнайома) */
+    private fun voiceSaysChild(): Boolean? {
+        val hz = ears.lastPitchHz?.takeIf { SystemClock.uptimeMillis() - ears.lastPitchAt < 15_000 } ?: return null
+        return when {
+            hz >= com.speedy.assistant.voice.Pitch.CHILD_HZ -> true
+            hz <= com.speedy.assistant.voice.Pitch.ADULT_HZ -> false
+            else -> null
+        }
     }
 
     /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */

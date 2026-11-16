@@ -46,6 +46,12 @@ class VoiceListener(
 ) {
     private val handler = Handler(Looper.getMainLooper())
 
+    /** Висота голосу останньої фрази (Гц, з буфера вартового) і коли заміряно. */
+    @Volatile var lastPitchHz: Float? = null
+        private set
+    @Volatile var lastPitchAt: Long = 0
+        private set
+
     /** Упевненість останнього розпізнавання (0..1) або null — розпізнавач не дав. */
     var lastConfidence: Float? = null
         private set
@@ -152,6 +158,12 @@ class VoiceListener(
                 preroll.addLast(buffer)
                 if (preroll.size > PREROLL_FRAMES) preroll.removeFirst()
                 if (!gate.feed(SoundGate.levelDb(buffer, n))) continue
+                // Хтось заговорив: тон голосу з буфера (локально) — дитина чи дорослий.
+                Pitch.ofSpeech(preroll.toList().takeLast(PREROLL_FRAMES))?.let {
+                    lastPitchHz = it
+                    lastPitchAt = SystemClock.uptimeMillis()
+                    Log.d(TAG, "тон голосу: ${it.toInt()} Гц")
+                }
                 val ear = offline?.takeIf { offlineNow() }
                 if (ear == null) {
                     handler.post { onVoiceDetected() }

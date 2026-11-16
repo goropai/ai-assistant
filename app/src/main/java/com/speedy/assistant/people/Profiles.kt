@@ -34,6 +34,9 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         var eyeCount: Int = 0,
         /** Сказали вголос: "це дитина" / "це дорослий" — важливіше за оцінку. */
         var ageOverride: String? = null,
+        /** Висота голосу (Гц): сума й кількість замірів. */
+        var voiceSum: Float = 0f,
+        var voiceCount: Int = 0,
     )
 
     enum class Age { CHILD, ADULT, UNKNOWN }
@@ -131,19 +134,35 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         save()
     }
 
-    /** Дитина чи дорослий: спершу сказане вголос, інакше — за обличчям (від 5 замірів). */
+    /** Замір висоти голосу людини, що говорить. */
+    @Synchronized
+    fun voiceSample(name: String, hz: Float, now: Long) {
+        val p = people.getOrPut(name) { Profile(firstSeen = now) }
+        if (p.voiceCount >= MAX_EYE_SAMPLES) return
+        p.voiceSum += hz
+        p.voiceCount++
+        save()
+    }
+
+    /**
+     * Дитина чи дорослий: спершу сказане вголос; далі голос (від 3 фраз) — він розрізняє надійно;
+     * обличчя — лише явно дитяче (положення очей у дітей і дорослих на цій камері перетинається).
+     */
     @Synchronized
     fun age(name: String): Age {
         val p = people[name] ?: return Age.UNKNOWN
         p.ageOverride?.let { return Age.valueOf(it) }
-        if (p.eyeCount < 5) return Age.UNKNOWN
-        val avg = p.eyeSum / p.eyeCount
-        return when {
-            avg >= CHILD_EYE_LEVEL -> Age.CHILD
-            avg <= ADULT_EYE_LEVEL -> Age.ADULT
-            else -> Age.UNKNOWN
+        if (p.voiceCount >= 3) {
+            val hz = p.voiceSum / p.voiceCount
+            if (hz >= com.speedy.assistant.voice.Pitch.CHILD_HZ) return Age.CHILD
+            if (hz <= com.speedy.assistant.voice.Pitch.ADULT_HZ) return Age.ADULT
         }
+        if (p.eyeCount >= 5 && p.eyeSum / p.eyeCount >= CHILD_EYE_LEVEL) return Age.CHILD
+        return Age.UNKNOWN
     }
+
+    @Synchronized
+    fun voiceHz(name: String): Float? = people[name]?.takeIf { it.voiceCount > 0 }?.let { it.voiceSum / it.voiceCount }
 
     @Synchronized
     fun eyeLevel(name: String): Float? = people[name]?.takeIf { it.eyeCount > 0 }?.let { it.eyeSum / it.eyeCount }
@@ -222,6 +241,8 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     eyeSum = o.optDouble("eyeSum", 0.0).toFloat(),
                     eyeCount = o.optInt("eyeCount"),
                     ageOverride = o.optString("age").ifBlank { null },
+                    voiceSum = o.optDouble("voiceSum", 0.0).toFloat(),
+                    voiceCount = o.optInt("voiceCount"),
                 )
             }
         } catch (e: Exception) {
@@ -248,6 +269,8 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     .put("eyeSum", p.eyeSum.toDouble())
                     .put("eyeCount", p.eyeCount)
                     .put("age", p.ageOverride.orEmpty())
+                    .put("voiceSum", p.voiceSum.toDouble())
+                    .put("voiceCount", p.voiceCount)
             )
         }
         f.writeText(json.toString())
