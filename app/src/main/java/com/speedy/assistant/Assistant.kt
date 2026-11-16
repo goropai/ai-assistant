@@ -65,6 +65,9 @@ class Assistant(
     private val bringToFront: () -> Unit = {},
     /** Відкрити налаштування доступу: "notes" — сповіщення, "hands" — спеціальні можливості. */
     private val openAccessSettings: (String) -> Unit = {},
+    /** Денний ліміт розмов дитини і скільки хвилин дозволено (0 — без обмеження). */
+    private val childLimit: com.speedy.assistant.settings.ChildLimit? = null,
+    private val childLimitMinutes: () -> Int = { 0 },
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
@@ -335,6 +338,24 @@ class Assistant(
         lastInteraction = SystemClock.uptimeMillis()
         inConversation = true
         noteVoice()
+        // Дитина: денний ліміт розмов. Вичерпано — Спіді "втомилась" (без моделі).
+        if (childLimit != null && childSpeaking() && LocalCommands.match(command) != LocalCommand.STOP) {
+            val kid = partner() ?: "дитина"
+            if (childLimit.exhausted(kid, childLimitMinutes(), System.currentTimeMillis())) {
+                Log.i(TAG, "ліміт дитини ($kid) вичерпано")
+                inConversation = false
+                runBusy {
+                    face.setMood(Mood.SLEEPY)
+                    say(listOf(
+                        "Ой, я так втомилася… Хочу трохи відпочити. Пограємо завтра!",
+                        "Мої батарейки втомилися, мені треба поспати. Побачимось завтра!",
+                        "Я вже дуже хочу відпочити. Давай завтра, добре?",
+                    ).random())
+                }
+                return
+            }
+            childLimit.talk(kid, System.currentTimeMillis())
+        }
         runBusy { if (command.isBlank()) greet() else handle(command) }
     }
 
@@ -394,7 +415,11 @@ class Assistant(
                 english?.progress?.resetLevel(partner() ?: "гість")
                 return englishLesson()
             }
-            LocalCommand.AGE_CHILD, LocalCommand.AGE_ADULT -> {
+            LocalCommand.AGE_ADULT -> {
+                // Інакше дитина скаже "я дорослий" й обійде ліміт.
+                return say("Позначити людину дорослою можна лише в налаштуваннях — це для батьків.")
+            }
+            LocalCommand.AGE_CHILD -> {
                 val name = partner() ?: return say("Подивись на мене, щоб я знала, про кого це.")
                 val child = cmd == LocalCommand.AGE_CHILD
                 profiles?.setAge(name, if (child) com.speedy.assistant.people.Profiles.Age.CHILD else com.speedy.assistant.people.Profiles.Age.ADULT)
@@ -713,7 +738,9 @@ class Assistant(
             course.vocabulary, course.curriculum, course.progress, io, name,
             now = { System.currentTimeMillis() }, extra = course.store, generate = course.generate, child = child,
         )
+        val lessonStart = System.currentTimeMillis()
         lesson.run()
+        if (child == true || childSpeaking()) childLimit?.add(name, System.currentTimeMillis() - lessonStart, System.currentTimeMillis())
         Log.i(TAG, "урок англійської завершено ($name, рівень ${course.progress.learner(name).level}): ${lesson.result}")
         face.setMood(Mood.HAPPY)
     }

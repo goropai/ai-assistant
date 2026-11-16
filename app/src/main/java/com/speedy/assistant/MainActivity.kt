@@ -155,6 +155,8 @@ class MainActivity : AppCompatActivity() {
         speaker = voice
         val profiles = com.speedy.assistant.people.Profiles(java.io.File(filesDir, "profiles.json"))
         val people = People(FaceBook(java.io.File(filesDir, "faces.json")), ageOf = { profiles.age(it).name })
+        profilesRef = profiles
+        peopleRef = people
         val pets = com.speedy.assistant.vision.Pets(java.io.File(filesDir, "pets.json"))
         presence = PresenceWatcher(this, this, people, pets, profiles) { events -> assistant?.onPresence(events) }
 
@@ -196,10 +198,15 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
             },
             openAccessSettings = { which ->
-                val action = if (which == "notes") "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"
-                else android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
-                try { startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { toast("Не вдалося відкрити налаштування") }
+                // Системні доступи — лише за PIN батьків.
+                com.speedy.assistant.settings.PinDialog.require(this, settings) {
+                    val action = if (which == "notes") "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"
+                    else android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
+                    try { startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { toast("Не вдалося відкрити налаштування") }
+                }
             },
+            childLimit = childLimit,
+            childLimitMinutes = { settings.childLimitMinutes },
             isOnline = { !networkLost && connectivity.activeNetwork != null },
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
@@ -264,17 +271,43 @@ class MainActivity : AppCompatActivity() {
         if (!settings.hasActiveKey) {
             face.setMood(Mood.SAD)
             toast("Додай API-ключ у налаштуваннях")
-            openSettings()
+            openSettings() // без PIN — спершу задати його
+        } else if (!settings.hasPin) {
+            // Перший запуск (або оновлення до версії з PIN): батьки задають PIN.
+            com.speedy.assistant.settings.PinDialog.setup(this, settings) {}
         }
     }
 
+    private val childLimit by lazy {
+        com.speedy.assistant.settings.ChildLimit(load = { settings.childUsage }, save = { settings.childUsage = it })
+    }
+
+    /** Налаштування — лише за PIN батьків. */
     private fun openSettings() {
-        SettingsDialog.show(this, settings) {
-            face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
-            checkBrain()
-            updatePresence()
+        com.speedy.assistant.settings.PinDialog.require(this, settings) {
+            val profiles = profilesRef
+            val people = peopleRef
+            val family = if (profiles != null && people != null) SettingsDialog.Family(
+                names = people.names(),
+                isChild = { profiles.age(it) == com.speedy.assistant.people.Profiles.Age.CHILD },
+                setChild = { name, child ->
+                    val now = profiles.age(name)
+                    val wanted = if (child) com.speedy.assistant.people.Profiles.Age.CHILD else com.speedy.assistant.people.Profiles.Age.ADULT
+                    if (now != wanted) profiles.setAge(name, wanted)
+                },
+                usedToday = { childLimit.usedMinutes(System.currentTimeMillis()) },
+                resetLimit = { childLimit.reset() },
+            ) else null
+            SettingsDialog.show(this, settings, family) {
+                face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
+                checkBrain()
+                updatePresence()
+            }
         }
     }
+
+    private var profilesRef: com.speedy.assistant.people.Profiles? = null
+    private var peopleRef: People? = null
 
     /** Камера для присутності — лише коли Спіді вільна, екран активний і батарея не сідає. */
     private fun updatePresence() {

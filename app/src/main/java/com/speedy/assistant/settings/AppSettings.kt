@@ -49,6 +49,30 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("presence", true)
         set(value) = prefs.edit().putBoolean("presence", value).apply()
 
+    // --- PIN батьків (лише хеш із сіллю) ---
+    val hasPin: Boolean get() = prefs.getString("pin_hash", null) != null
+
+    fun setPin(pin: String) {
+        val salt = Pin.newSalt()
+        prefs.edit().putString("pin_salt", salt).putString("pin_hash", Pin.hash(pin, salt)).apply()
+    }
+
+    fun checkPin(pin: String): Boolean {
+        val salt = prefs.getString("pin_salt", null) ?: return false
+        val hash = prefs.getString("pin_hash", null) ?: return false
+        return Pin.matches(pin, salt, hash)
+    }
+
+    /** Хвилин розмови на день для дитини; 0 — без обмеження. */
+    var childLimitMinutes: Int
+        get() = prefs.getInt("child_limit_min", 15)
+        set(value) = prefs.edit().putInt("child_limit_min", value.coerceIn(0, 600)).apply()
+
+    /** Облік часу дітей сьогодні (JSON, див. ChildLimit). */
+    var childUsage: String?
+        get() = prefs.getString("child_usage", null)
+        set(value) = prefs.edit().putString("child_usage", value).apply()
+
     val hasActiveKey: Boolean
         get() = if (provider == "gemini") geminiKey.isNotBlank() else anthropicKey.isNotBlank()
 }

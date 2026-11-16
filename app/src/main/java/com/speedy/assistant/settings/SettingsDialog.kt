@@ -17,7 +17,16 @@ import com.speedy.assistant.BuildConfig
 /** Простий діалог налаштувань (відкривається довгим натисканням на обличчя). */
 object SettingsDialog {
 
-    fun show(context: Context, settings: AppSettings, onSaved: () -> Unit) {
+    /** Діти: імена знайомих і хто з них дитина (для ліміту й дитячого тону). */
+    class Family(
+        val names: List<String>,
+        val isChild: (String) -> Boolean,
+        val setChild: (String, Boolean) -> Unit,
+        val usedToday: () -> Map<String, Int>,
+        val resetLimit: () -> Unit,
+    )
+
+    fun show(context: Context, settings: AppSettings, family: Family? = null, onSaved: () -> Unit) {
         val pad = (16 * context.resources.displayMetrics.density).toInt()
         val form = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -66,6 +75,29 @@ object SettingsDialog {
         }
         form.addView(presence)
 
+        label("Діти: хвилин розмови на день (0 — без обмеження)")
+        val limit = field(settings.childLimitMinutes.toString(), "15").apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        val childBoxes = family?.names.orEmpty().map { name ->
+            CheckBox(context).apply {
+                text = "$name — дитина"
+                isChecked = family!!.isChild(name)
+                form.addView(this)
+            }
+        }
+        val usage = TextView(context).apply {
+            fun refresh() {
+                val used = family?.usedToday().orEmpty()
+                text = if (used.isEmpty()) "Сьогодні діти ще не розмовляли."
+                else "Сьогодні: " + used.entries.joinToString(", ") { "${it.key} — ${it.value} хв" }
+            }
+            refresh()
+            setPadding(0, pad / 2, 0, 0)
+            tag = Runnable { refresh() }
+        }
+        form.addView(usage)
+
         AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
             .setTitle("Спіді ${BuildConfig.VERSION_NAME}")
             .setView(ScrollView(context).apply { addView(form) })
@@ -77,9 +109,25 @@ object SettingsDialog {
                 settings.geminiModel = geminiModel.text.toString()
                 settings.robotUrl = robotUrl.text.toString()
                 settings.presenceEnabled = presence.isChecked
+                settings.childLimitMinutes = limit.text.toString().toIntOrNull() ?: settings.childLimitMinutes
+                family?.names?.zip(childBoxes)?.forEach { (name, box) -> family.setChild(name, box.isChecked) }
                 onSaved()
             }
             .setNegativeButton("Скасувати", null)
-            .show()
+            .apply {
+                if (family != null) setNeutralButton("Скинути ліміт", null)
+            }
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    // "Скинути ліміт" не закриває діалог — можна скільки завгодно разів.
+                    dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+                        family?.resetLimit?.invoke()
+                        (usage.tag as? Runnable)?.run()
+                        android.widget.Toast.makeText(context, "Денний ліміт скинуто", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }
+                dialog.show()
+            }
     }
 }
