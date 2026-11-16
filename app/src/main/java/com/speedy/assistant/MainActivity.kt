@@ -153,9 +153,9 @@ class MainActivity : AppCompatActivity() {
         if (assistant != null) return
         val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
         speaker = voice
-        val people = People(FaceBook(java.io.File(filesDir, "faces.json")))
-        val pets = com.speedy.assistant.vision.Pets(java.io.File(filesDir, "pets.json"))
         val profiles = com.speedy.assistant.people.Profiles(java.io.File(filesDir, "profiles.json"))
+        val people = People(FaceBook(java.io.File(filesDir, "faces.json")), ageOf = { profiles.age(it).name })
+        val pets = com.speedy.assistant.vision.Pets(java.io.File(filesDir, "pets.json"))
         presence = PresenceWatcher(this, this, people, pets, profiles) { events -> assistant?.onPresence(events) }
 
         assistant = Assistant(

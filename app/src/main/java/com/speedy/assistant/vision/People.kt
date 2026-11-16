@@ -5,11 +5,23 @@ package com.speedy.assistant.vision
  * ([com.speedy.assistant.Assistant]), тому всі методи синхронізовані.
  * Час — той самий монотонний годинник, що й у камери (SystemClock.uptimeMillis).
  */
-class People(private val book: FaceBook) {
-    private val tracker = FaceIdTracker(book)
+class People(
+    private val book: FaceBook,
+    /** Вік за профілем: CHILD / ADULT / UNKNOWN (див. Profiles.age). */
+    private val ageOf: (String) -> String = { "UNKNOWN" },
+) {
+    private val tracker = FaceIdTracker(book, ageFits = { name, eye -> ageFits(ageOf(name), eye) })
 
     @Synchronized
     fun update(now: Long, faces: List<FaceObservation>): List<PresenceEvent> = tracker.update(now, faces)
+
+    /**
+     * Хто говорить зі Спіді: найближче (найбільше) обличчя. Знайоме — ім'я; незнайоме або давно
+     * не видно — null (тоді Спіді не приписує розмову знайомому, що стоїть позаду).
+     */
+    @Synchronized
+    fun speaker(now: Long, maxAgeMs: Long = 10_000): String? =
+        tracker.closestName?.takeIf { now - tracker.closestSeenAt <= maxAgeMs }
 
     /** Знайомі обличчя з останнього кадру. */
     @Synchronized
@@ -77,6 +89,14 @@ class People(private val book: FaceBook) {
     }
 
     companion object {
+        /** Пороги як у Profiles: дитяче обличчя (очі ≥ 0.47) не може бути дорослим профілем і навпаки. */
+        fun ageFits(age: String, eyeLevel: Float?): Boolean = when {
+            eyeLevel == null -> true
+            age == "ADULT" -> eyeLevel < 0.47f
+            age == "CHILD" -> eyeLevel > 0.44f
+            else -> true
+        }
+
         private val WAKE_LIKE = setOf("спіді", "спід", "спіть", "спікер", "speedy").map { soundKey(it) }.toSet()
 
         /** Звучання без дрібниць написання: і/и/ї/i, е/є, г/ґ, апостроф. */

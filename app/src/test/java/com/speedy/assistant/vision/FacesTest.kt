@@ -133,6 +133,32 @@ class FacesTest {
     }
 
     @Test
+    fun speakerIsTheClosestFace() {
+        val people = People(FaceBook(null).apply { remember("Тарас", listOf(adult)) })
+        // Тарас позаду (мале обличчя), незнайома дитина поруч (велике) — говорить не Тарас.
+        people.update(0, listOf(FaceObservation(adult, 0.03f), FaceObservation(child, 0.2f)))
+        assertEquals(listOf("Тарас"), people.presentNames(0))
+        assertNull(people.speaker(0))
+        // Тарас підійшов ближче — тепер він співрозмовник.
+        people.update(1500, listOf(FaceObservation(adult, 0.25f), FaceObservation(child, 0.05f)))
+        assertEquals("Тарас", people.speaker(1500))
+    }
+
+    @Test
+    fun childFaceNeverMatchesAdultProfile() {
+        // Відбиток дитини дуже схожий на татів (родинна схожість), але очі — по-дитячому низько.
+        val people = People(FaceBook(null).apply { remember("Тарас", listOf(adult)) }, ageOf = { if (it == "Тарас") "ADULT" else "UNKNOWN" })
+        val daughter = FaceObservation(adultAgain, 0.2f, eyeLevel = 0.50f)
+        people.update(0, listOf(daughter))
+        assertEquals(listOf(PresenceEvent.Stranger), people.update(1500, listOf(daughter)))
+        assertTrue(people.presentNames(1500).isEmpty())
+        // Сам Тарас (доросла ознака) — впізнається.
+        val dad = FaceObservation(adultAgain, 0.2f, eyeLevel = 0.41f)
+        people.update(3000, listOf(dad))
+        assertEquals(listOf("Тарас"), people.presentNames(3000))
+    }
+
+        @Test
     fun namesFromPhrases() {
         assertEquals(LocalCommand.INTRODUCE, LocalCommands.match("мене звати Тарас"))
         assertEquals("Тарас", LocalCommands.parseName("Мене звати Тарас"))

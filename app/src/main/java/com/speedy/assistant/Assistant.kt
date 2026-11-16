@@ -712,7 +712,7 @@ class Assistant(
     }
 
     /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */
-    private fun partner(): String? = people?.presentNames(SystemClock.uptimeMillis())?.singleOrNull()
+    private fun partner(): String? = people?.speaker(SystemClock.uptimeMillis())
 
     /** Факт — у профіль співрозмовника, а якщо його не знаємо — у загальну пам'ять. */
     private fun rememberFact(fact: String) {

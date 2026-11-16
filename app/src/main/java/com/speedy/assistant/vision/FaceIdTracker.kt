@@ -12,6 +12,11 @@ class FaceIdTracker(
     private val forgetAfterMs: Long = 10_000,
     /** Незнайомця питаємо, лише коли обличчя досить велике (людина поруч, а не на фоні). */
     private val strangerMinArea: Float = 0.04f,
+    /**
+     * Чи відповідає ознака віку обличчя (положення очей) відомому вікові людини: дитяче обличчя
+     * не може бути дорослим профілем і навпаки, хоч би якою великою була схожість відбитків.
+     */
+    private val ageFits: (name: String, eyeLevel: Float?) -> Boolean = { _, _ -> true },
 ) {
     private val streak = mutableMapOf<String, Int>()
     private var strangerStreak = 0
@@ -22,6 +27,12 @@ class FaceIdTracker(
     var strangerSamples: List<FloatArray> = emptyList()
         private set
     private var strangerSeenAt = Long.MIN_VALUE / 2
+
+    /** Ім'я найближчого обличчя (null — незнайомець) і коли його бачили. */
+    var closestName: String? = null
+        private set
+    var closestSeenAt: Long = Long.MIN_VALUE / 2
+        private set
 
     /** Хто з облич останнього кадру — хто (для ознак обличчя в профілі). */
     var lastMatches: List<Pair<String, FaceObservation>> = emptyList()
@@ -42,11 +53,22 @@ class FaceIdTracker(
         val seenNames = mutableSetOf<String>()
         var stranger: FaceObservation? = null
         lastMatches = mutableListOf()
+        var closest: Pair<String?, Float>? = null
         for (face in faces) {
-            val name = book.match(face.embedding)?.first
-            if (name != null) { seenNames += name; (lastMatches as MutableList) += name to face }
+            val best = book.match(face.embedding, 0f)
+            val matched = book.match(face.embedding)?.first?.takeIf { ageFits(it, face.eyeLevel) }
+            android.util.Log.d(
+                "FaceId", "обличчя area=%.3f очі=%s схоже на %s (%.2f)%s".format(
+                    face.area, face.eyeLevel?.let { "%.3f".format(it) } ?: "?", best?.first ?: "—", best?.second ?: 0f,
+                    if (best != null && best.second >= FaceBook.MATCH_THRESHOLD && matched == null) " — відхилено за віком" else "",
+                )
+            )
+            if (matched != null) { seenNames += matched; (lastMatches as MutableList) += matched to face }
             else if (face.area >= strangerMinArea && stranger == null) stranger = face
+            if (closest == null || face.area > closest.second) closest = matched to face.area
         }
+        closestName = closest?.first
+        closestSeenAt = if (closest != null) now else closestSeenAt
 
         for (name in seenNames) {
             lastSeen[name] = now
