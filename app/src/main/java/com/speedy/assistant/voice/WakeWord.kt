@@ -32,6 +32,34 @@ object WakeWord {
             pattern.find(text)?.let { return text.substring(it.range.last + 1).trim().replace(LEADING_AND, "") }
             trailing.find(text)?.let { return text.substring(0, it.range.first).trim() }
         }
+        // Дитяча вимова: Google пише "Сенді", "спидин", "співдін" — нечітко, лише на початку фрази.
+        for (candidate in candidates) fuzzy(candidate.trim())?.let { return it }
         return null
+    }
+
+    private val greeting = setOf("гей", "ей", "хей", "привіт", "привет", "hey")
+
+    /** Перше слово (після привітання) схоже на "спіді": 4–7 літер, на "с"/"ц", ≤ 2 відмінності. */
+    private fun fuzzy(text: String): String? {
+        val words = text.split(Regex("[\\s,.!?]+")).filter { it.isNotEmpty() }
+        val start = if (words.firstOrNull()?.lowercase() in greeting) 1 else 0
+        // "и"/"і" розпізнавач у дитячій вимові плутає — зрівнюємо; "-ть" — дієслова ("спить"), не ім'я.
+        val word = words.getOrNull(start)?.lowercase()?.replace('и', 'і') ?: return null
+        if (word.length !in 4..7 || word[0] !in "сц" || word.endsWith("ть") || distance(word, "спіді") > 2) return null
+        return words.drop(start + 1).joinToString(" ")
+    }
+
+    private fun distance(a: String, b: String): Int {
+        val dp = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = dp[0]
+            dp[0] = i
+            for (j in 1..b.length) {
+                val tmp = dp[j]
+                dp[j] = minOf(dp[j] + 1, dp[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
+                prev = tmp
+            }
+        }
+        return dp[b.length]
     }
 }

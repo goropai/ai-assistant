@@ -62,6 +62,12 @@ class CommandsTest {
         assertEquals("котра година", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("спід і котра година")))
         assertEquals("", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("спід і")))
         assertEquals(null, com.speedy.assistant.voice.WakeWord.extractCommand(listOf("я купив спідниці")))
+        // Дитяча вимова "Спіді" (так розпізнав Google, коли говорила Ліна).
+        assertEquals("як справи", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("Привіт Сенді як справи")))
+        assertEquals("", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("привіт спидин")))
+        assertEquals("", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("співдін")))
+        assertEquals(null, com.speedy.assistant.voice.WakeWord.extractCommand(listOf("спить кіт")))
+        assertEquals(null, com.speedy.assistant.voice.WakeWord.extractCommand(listOf("сьогодні холодно")))
     }
 
     @Test
