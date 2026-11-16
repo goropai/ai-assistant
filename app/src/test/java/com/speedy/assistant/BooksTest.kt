@@ -108,6 +108,23 @@ class BooksTest {
         assertTrue(Books.isBook(File("Statement.PDF")))
     }
 
+    @Test
+    fun scannedFallbackOnlyForPdfWithoutText() {
+        val opened = mutableListOf<String>()
+        val scans = object : com.speedy.assistant.books.ScanReader {
+            override fun open(file: File): com.speedy.assistant.books.Book {
+                opened += file.name
+                throw com.speedy.assistant.books.OcrNotReadyException()
+            }
+            override suspend fun prepare() {}
+        }
+        val shelf = Bookshelf({ emptyList() }, null, scans = scans)
+        // FB2 без тексту — не скан: розпізнавання не пробуємо.
+        val fb2 = tmp.newFile("empty.fb2").apply { writeText("<FictionBook/>") }
+        try { shelf.open(fb2); throw AssertionError() } catch (e: NoTextException) {}
+        assertTrue(opened.isEmpty())
+    }
+
     @Test(expected = NoTextException::class)
     fun fb2WithoutBody() {
         Fb2Book.parse("<FictionBook><description/></FictionBook>".toByteArray())

@@ -17,6 +17,8 @@ interface Book : Closeable {
     val chapters: Int
     /** Розділи — сторінки (PDF): "сторінка 5", а не "розділ 5". */
     val pages: Boolean get() = false
+    /** Текст розпізнається зі сканів — сторінка може бути готова не одразу. */
+    val scanned: Boolean get() = false
     fun chapter(index: Int): Chapter
     override fun close() {}
 }

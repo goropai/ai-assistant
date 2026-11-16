@@ -126,6 +126,9 @@ dependencies {
     implementation("com.google.mlkit:face-detection:16.1.7")
     // Текст із PDF для читання книг вголос (вбудований PdfRenderer уміє лише малювати сторінки).
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    // Розпізнавання тексту PDF-сканів (Tesseract, офлайн). Однопотоковий варіант: OpenMP забрав би
+    // всі ядра, а поруч працює синтез мовлення. Словник (ukr) завантажується окремо, див. Ocr.
+    implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
 
     testImplementation("junit:junit:4.13.2")
     // Справжній org.json для JVM-тестів (в android.jar лише заглушки).

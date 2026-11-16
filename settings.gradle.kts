@@ -10,6 +10,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // Tesseract4Android (розпізнавання тексту сканів) — лише звідси.
+        maven {
+            url = uri("https://jitpack.io")
+            content { includeGroup("cz.adaptech.tesseract4android") }
+        }
     }
 }
 

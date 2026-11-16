@@ -216,7 +216,10 @@ class MainActivity : AppCompatActivity() {
             isOnline = { !networkLost && connectivity.activeNetwork != null },
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
-            books = com.speedy.assistant.books.Bookshelf(::storageRoots, java.io.File(filesDir, "books.json")),
+            books = com.speedy.assistant.books.Bookshelf(
+                ::storageRoots, java.io.File(filesDir, "books.json"),
+                scans = com.speedy.assistant.books.Ocr(this, http),
+            ),
             hasFileAccess = ::hasFileAccess,
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar,

@@ -15,7 +15,20 @@ class Bookshelf(
     private val roots: () -> List<File>,
     private val progressFile: File?,
     private val isBook: (File) -> Boolean = Books::isBook,
+    /** PDF без тексту — розпізнавання сторінок (null — сканів не читаємо). */
+    val scans: ScanReader? = null,
 ) {
+    /**
+     * Відкрити книгу; PDF-скан — через розпізнавання.
+     * @throws NoTextException тексту немає й розпізнати нічим; [OcrNotReadyException] — спершу [ScanReader.prepare].
+     */
+    fun open(file: File): Book = try {
+        Books.open(file)
+    } catch (e: NoTextException) {
+        if (scans == null || !file.name.endsWith(".pdf", ignoreCase = true)) throw e
+        scans.open(file)
+    }
+
     private var cache: List<File> = emptyList()
     private var cachedAt = Long.MIN_VALUE / 2
     private val places = mutableMapOf<String, Place>()

@@ -970,6 +970,53 @@ class Assistant(
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
     }
 
+    /**
+     * Відкрити книгу; PDF-скан — через розпізнавання (словник для нього завантажуємо при першому
+     * скані). null — не вийшло (Спіді вже пояснила чому).
+     */
+    private suspend fun openBook(shelf: com.speedy.assistant.books.Bookshelf, file: File): com.speedy.assistant.books.Book? {
+        val title = shelf.title(file)
+        suspend fun attempt(open: () -> com.speedy.assistant.books.Book): com.speedy.assistant.books.Book? = try {
+            withContext(Dispatchers.IO) { open() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: com.speedy.assistant.books.NoTextException) {
+            face.setMood(Mood.SAD)
+            say("У книзі «$title» немає тексту, який я можу прочитати.")
+            null
+        } catch (e: com.speedy.assistant.books.OcrNotReadyException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "книга ${file.path}: ${e.message}")
+            face.setMood(Mood.SAD)
+            say("Не вдалося відкрити «$title» — файл пошкоджений або незнайомого формату.")
+            null
+        }
+        return try {
+            attempt { shelf.open(file) }
+        } catch (e: com.speedy.assistant.books.OcrNotReadyException) {
+            val scans = shelf.scans ?: return null
+            say("«$title» — це скан. Щоб розпізнавати сторінки, мені треба завантажити словник, це чотири мегабайти. Хвилинку.")
+            face.setMood(Mood.THINKING)
+            try {
+                scans.prepare()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "словник для розпізнавання: ${e.message}")
+                face.setMood(Mood.SAD)
+                chirps.play(Chirp.NO_NETWORK)
+                say("Не вдалося завантажити словник. Перевір інтернет і попроси ще раз.")
+                return null
+            }
+            try {
+                attempt { scans.open(file) }
+            } catch (e: com.speedy.assistant.books.OcrNotReadyException) {
+                null
+            }
+        }
+    }
+
     private fun unitWord(file: File) = if (file.name.endsWith(".pdf", ignoreCase = true)) "сторінка" else "розділ"
 
     /**
@@ -982,18 +1029,7 @@ class Assistant(
         val reader = partner()
         val saved = shelf.place(file)
         face.setMood(Mood.THINKING)
-        val book = try {
-            withContext(Dispatchers.IO) { Books.open(file) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: com.speedy.assistant.books.NoTextException) {
-            face.setMood(Mood.SAD)
-            return say("У книзі «${shelf.title(file)}» немає тексту, який я можу прочитати. Мабуть, це скан, а розпізнавати текст на сторінках я ще не вмію.")
-        } catch (e: Exception) {
-            Log.w(TAG, "книга ${file.path}: ${e.message}")
-            face.setMood(Mood.SAD)
-            return say("Не вдалося відкрити «${shelf.title(file)}» — файл пошкоджений або незнайомого формату.")
-        }
+        val book = openBook(shelf, file) ?: return
         book.use {
             if (book.chapters == 0) return say("У книзі «${shelf.title(file)}» порожньо.")
             val title = book.title ?: Books.titleFromName(file)
@@ -1007,10 +1043,19 @@ class Assistant(
             val started = System.currentTimeMillis()
             face.setMood(Mood.HAPPY)
             say(intro ?: if (fresh) "Читаю «$title». Щоб зупинити, торкнись мене." else "Продовжую «$title».")
+            // Скан: пояснюємо один раз, далі — коротко, коли сторінку доводиться чекати.
+            var explained = fresh && book.scanned
+            if (explained) say("Це скан: кожну сторінку я спершу розглядаю, тож буде трохи повільніше.")
             try {
                 while (chapter < book.chapters) {
+                    if ((book as? com.speedy.assistant.books.ScannedPdfBook)?.isReady(chapter) == false) {
+                        face.setMood(Mood.THINKING)
+                        if (!explained) say("Хвилинку, розглядаю сторінку.")
+                        explained = false
+                    }
                     val text = try {
-                        withContext(Dispatchers.IO) { book.chapter(chapter).text }
+                        // Перериваємо й очікування розпізнавання: дотик до екрана — і одразу стоп.
+                        kotlinx.coroutines.runInterruptible(Dispatchers.IO) { book.chapter(chapter).text }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
