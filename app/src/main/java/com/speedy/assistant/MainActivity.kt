@@ -223,6 +223,7 @@ class MainActivity : AppCompatActivity() {
             media = mediaShelf,
             playback = playback,
             vlc = vlc,
+            translator = com.speedy.assistant.translate.MlKitTranslator(),
             hasFileAccess = ::hasFileAccess,
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar,

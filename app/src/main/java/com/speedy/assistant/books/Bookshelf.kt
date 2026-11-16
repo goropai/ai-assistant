@@ -3,8 +3,11 @@ package com.speedy.assistant.books
 import org.json.JSONObject
 import java.io.File
 
-/** Місце в книзі: розділ (сторінка PDF) і речення в ньому. */
-data class Place(val chapter: Int, val sentence: Int, val chapters: Int = 0, val title: String = "", val finished: Boolean = false)
+/** Місце в книзі: розділ (сторінка PDF) і речення в ньому; [translate] — читаємо в перекладі українською. */
+data class Place(
+    val chapter: Int, val sentence: Int, val chapters: Int = 0, val title: String = "",
+    val finished: Boolean = false, val translate: Boolean = false,
+)
 
 /**
  * Книги в пам'яті телефона й на картці (див. [StorageScan]). Місце читання — у files/books.json:
@@ -41,7 +44,7 @@ class Bookshelf(
                 o.optJSONObject("books")?.let { b ->
                     for (path in b.keys()) {
                         val p = b.getJSONObject(path)
-                        places[path] = Place(p.optInt("chapter"), p.optInt("sentence"), p.optInt("chapters"), p.optString("title"), p.optBoolean("finished"))
+                        places[path] = Place(p.optInt("chapter"), p.optInt("sentence"), p.optInt("chapters"), p.optString("title"), p.optBoolean("finished"), p.optBoolean("translate"))
                     }
                 }
                 o.optJSONObject("last")?.let { l -> for (who in l.keys()) lastOf[who] = l.getString(who) }
@@ -92,7 +95,7 @@ class Bookshelf(
         val books = JSONObject()
         places.forEach { (path, p) ->
             books.put(path, JSONObject().put("chapter", p.chapter).put("sentence", p.sentence)
-                .put("chapters", p.chapters).put("title", p.title).put("finished", p.finished))
+                .put("chapters", p.chapters).put("title", p.title).put("finished", p.finished).put("translate", p.translate))
         }
         f.writeText(JSONObject().put("books", books).put("last", JSONObject(lastOf as Map<*, *>)).toString())
     }

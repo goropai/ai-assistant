@@ -32,6 +32,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
 import com.speedy.assistant.books.BookCommand
 import com.speedy.assistant.books.Books
 import com.speedy.assistant.books.Lang
@@ -84,6 +85,8 @@ class Assistant(
     private val media: com.speedy.assistant.media.MediaShelf? = null,
     private val playback: com.speedy.assistant.media.MediaPlayback? = null,
     private val vlc: com.speedy.assistant.media.Vlc? = null,
+    /** Переклад uk/ru/en (книги й фрази). */
+    private val translator: com.speedy.assistant.translate.Translator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -619,6 +622,8 @@ class Assistant(
                 }
             }
         }
+        // Переклад фраз і книг — без моделі (офлайн).
+        com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return }
         // Фільми й аудіокниги у VLC — без моделі ("увімкни Дюну" без такого файлу — далі).
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return }
         // Книги вголос — без моделі ("почитай Кобзаря" без такої книги — далі, до моделі).
@@ -814,9 +819,16 @@ class Assistant(
 
     /** Відповідь на уроці: слухаємо одразу (без "Спіді") потрібною мовою, до 9 с. */
     private suspend fun listenLesson(english: Boolean): com.speedy.assistant.english.Heard? {
+        val texts = listenIn(if (english) "en-US" else "uk-UA")
+        Log.d(TAG, "урок почув (${if (english) "en" else "uk"}): $texts, впевненість ${ears.lastConfidence}")
+        return texts?.let { com.speedy.assistant.english.Heard(it, ears.lastConfidence) }
+    }
+
+    /** Одна фраза одразу (без "Спіді") мовою [language] ("en-US", "ru-RU"); null — мовчали. */
+    private suspend fun listenIn(language: String): List<String>? {
         val answer = kotlinx.coroutines.CompletableDeferred<List<String>>()
         lessonAnswer = answer
-        ears.language = if (english) "en-US" else "uk-UA"
+        ears.language = language
         face.setMood(Mood.LISTENING)
         ears.start(listenNow = true)
         val texts = kotlinx.coroutines.withTimeoutOrNull(LESSON_LISTEN_MS) { answer.await() }
@@ -824,8 +836,54 @@ class Assistant(
         ears.stop()
         ears.language = "uk-UA"
         delay(VoiceListener.UNMUTE_DELAY_MS) // звук ще приглушений після розпізнавача
-        Log.d(TAG, "урок почув (${if (english) "en" else "uk"}): $texts, впевненість ${ears.lastConfidence}")
-        return texts?.let { com.speedy.assistant.english.Heard(it, ears.lastConfidence) }
+        return texts
+    }
+
+    /** @return false — не впоралась (хай відповідає модель). */
+    private suspend fun handleTranslate(cmd: com.speedy.assistant.translate.TranslateCommand): Boolean {
+        val tr = translator ?: return false
+        Log.i(TAG, "переклад: $cmd")
+        when (cmd) {
+            is com.speedy.assistant.translate.TranslateCommand.Book -> {
+                val shelf = books ?: return false
+                val current = shelf.last(partner())
+                    ?: return true.also { say("Ми ще нічого не читали. Скажи «почитай книгу» і назву.") }
+                readBook(current, intro = if (cmd.translate) "Добре, читаю українською." else "Добре, читаю як написано.", translate = cmd.translate)
+            }
+            is com.speedy.assistant.translate.TranslateCommand.Phrase -> {
+                val text = cmd.text ?: run {
+                    // Фразу іншою мовою розпізнає Google — потрібен інтернет.
+                    if (cmd.from != Lang.UK && !isOnline()) return true.also { say("Щоб почути фразу іншою мовою, мені потрібен інтернет.") }
+                    say(when (cmd.from) { Lang.EN -> "Кажи англійською."; Lang.RU -> "Кажи російською."; Lang.UK -> "Кажи, що перекласти." })
+                    listenIn(cmd.from.locale.toLanguageTag())?.firstOrNull()
+                        ?: return true.also { face.setMood(Mood.THINKING); say("Не розчула. Спробуй ще раз.") }
+                }
+                face.setMood(Mood.THINKING)
+                val translated = translateWithModels(tr, text, cmd.from, cmd.to) ?: return true
+                face.setMood(Mood.HAPPY)
+                sayIn(translated, cmd.to, mutableSetOf())
+            }
+        }
+        return true
+    }
+
+    /**
+     * Переклад; перший раз для мов — завантаження моделей (~30 МБ кожна) з попередженням.
+     * null — не вдалося (Спіді вже сказала).
+     */
+    private suspend fun translateWithModels(tr: com.speedy.assistant.translate.Translator, text: String, from: Lang, to: Lang): String? = try {
+        if (!tr.ready(from, to)) {
+            say("Завантажую словники для перекладу, це до шістдесяти мегабайтів, один раз. Хвилинку.")
+            tr.prepare(from, to)
+        }
+        tr.translate(text, from, to)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(TAG, "переклад $from→$to: ${e.message}")
+        face.setMood(Mood.SAD)
+        say("Не вдалося перекласти. Для першого разу потрібен інтернет, щоб завантажити словники.")
+        null
     }
 
     /** Тон щойно почутої фрази (якщо свіжий) — у профіль того, хто говорить. */
@@ -1059,7 +1117,7 @@ class Assistant(
                 if (file == null) {
                     if (!cmd.explicit) return false
                     offerBooks("Не знайшла книгу «$title».")
-                } else readBook(file)
+                } else readBook(file, translate = cmd.translate.takeIf { it })
             }
             is BookCommand.Continue -> if (current == null) offerBooks("Ми ще нічого не читали.") else readBook(current)
             BookCommand.List -> offerBooks()
@@ -1161,14 +1219,47 @@ class Assistant(
         }
     }
 
-    private fun unitWord(file: File) = if (file.name.endsWith(".pdf", ignoreCase = true)) "сторінка" else "розділ"
+    /** Моделі перекладу англійська/російська → українська — заздалегідь (з попередженням). */
+    private suspend fun prepareBookTranslation(): Boolean {
+        val tr = translator ?: return false
+        return try {
+            if (!tr.ready(Lang.EN, Lang.UK) || !tr.ready(Lang.RU, Lang.UK)) {
+                say("Завантажую словники для перекладу, це до дев'яноста мегабайтів, один раз. Хвилинку.")
+                tr.prepare(Lang.EN, Lang.UK)
+                tr.prepare(Lang.RU, Lang.UK)
+            }
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "моделі перекладу: ${e.message}")
+            say("Не вдалося завантажити словники перекладу — читатиму як написано. Для першого разу потрібен інтернет.")
+            false
+        }
+    }
+
+    /** Переклад фрагмента книги українською; null — не вийшло (читаємо оригінал). */
+    private suspend fun translateOrNull(text: String, from: Lang): String? = try {
+        translator?.translate(text, from, Lang.UK)?.takeIf { it.isNotBlank() }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(TAG, "переклад фрагмента: ${e.message}")
+        null
+    }
+
+    /** Код у технічній книзі не перекладаємо: багато дужок, "=", ";" — читаємо як є. */
+    private fun looksLikeCode(text: String): Boolean =
+        text.count { it in "{}()[];=<>" } > text.length / 20
+
+    private fun unitWord(file: File) =if (file.name.endsWith(".pdf", ignoreCase = true)) "сторінка" else "розділ"
 
     /**
      * Читає книгу вголос із [from] (інакше — зі збереженого місця), поки не дочитає, не торкнуться
      * екрана або не настане нагадування. Місце зберігається перед кожним фрагментом, тож після
      * зупинки продовжуємо з перерваного речення.
      */
-    private suspend fun readBook(file: File, from: Place? = null, intro: String? = null) {
+    private suspend fun readBook(file: File, from: Place? = null, intro: String? = null, translate: Boolean? = null) {
         val shelf = books ?: return
         val reader = partner()
         val saved = shelf.place(file)
@@ -1193,6 +1284,9 @@ class Assistant(
             var chapterLang: Lang? = null
             /** Про відсутній голос мови кажемо раз на книгу. */
             val warned = mutableSetOf<Lang>()
+            // Переклад — властивість книги (не місця): переходи між розділами його не скидають.
+            var translating = (translate ?: (saved?.translate == true)) && translator != null
+            if (translating && !prepareBookTranslation()) translating = false
             try {
                 while (chapter < book.chapters) {
                     if ((book as? com.speedy.assistant.books.ScannedPdfBook)?.isReady(chapter) == false) {
@@ -1212,20 +1306,32 @@ class Assistant(
                     // Мова розділу — за всім його текстом; фрагмента — за ним самим (код англійською
                     // в російській книзі), а короткий / неясний — мовою розділу.
                     chapterLang = Lang.detect(text, chapterLang) ?: chapterLang
-                    for (chunk in com.speedy.assistant.books.Sentences.chunks(com.speedy.assistant.books.Sentences.split(text), sentence)) {
-                        shelf.save(file, reader, Place(chapter, chunk.first, book.chapters, title))
+                    val chunks = com.speedy.assistant.books.Sentences.chunks(com.speedy.assistant.books.Sentences.split(text), sentence)
+                    val langs = chunks.map { Lang.detect(it.text, chapterLang) ?: Lang.UK }
+                    // Переклад: наступний фрагмент перекладається, поки звучить поточний (дочірня
+                    // задача читання — дотик до екрана скасовує й її).
+                    val here = CoroutineScope(currentCoroutineContext())
+                    fun translation(i: Int) = if (!translating || langs[i] == Lang.UK || looksLikeCode(chunks[i].text)) null
+                        else here.async { translateOrNull(chunks[i].text, langs[i]) }
+                    var next = chunks.indices.firstOrNull()?.let(::translation)
+                    for ((i, chunk) in chunks.withIndex()) {
+                        val pending = next
+                        next = if (i + 1 < chunks.size) translation(i + 1) else null
+                        shelf.save(file, reader, Place(chapter, chunk.first, book.chapters, title, translate = translating))
                         lastReadAt = SystemClock.uptimeMillis()
                         if (waitingForTurn > 0) {
                             Log.i(TAG, "читання на паузі: чекає нагадування")
+                            pending?.cancel(); next?.cancel()
                             return
                         }
                         face.setMood(Mood.NEUTRAL)
-                        sayIn(chunk.text, Lang.detect(chunk.text, chapterLang) ?: Lang.UK, warned)
+                        val translated = pending?.await()
+                        if (translated != null) say(translated) else sayIn(chunk.text, langs[i], warned)
                     }
                     chapter++
                     sentence = 0
                 }
-                shelf.save(file, reader, Place(0, 0, book.chapters, title, finished = true))
+                shelf.save(file, reader, Place(0, 0, book.chapters, title, finished = true, translate = translating))
                 face.setMood(Mood.HAPPY)
                 chirps.play(Chirp.HAPPY)
                 say("Кінець книги «$title».")

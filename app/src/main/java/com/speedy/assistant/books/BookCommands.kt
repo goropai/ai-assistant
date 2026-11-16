@@ -6,7 +6,7 @@ sealed interface BookCommand {
      * "почитай книгу Кобзар". [title] null — назви не сказали. [explicit] — сказали "книгу";
      * інакше ("почитай Кобзаря") це може бути й прохання до моделі, якщо такої книги немає.
      */
-    data class Read(val title: String?, val explicit: Boolean) : BookCommand
+    data class Read(val title: String?, val explicit: Boolean, val translate: Boolean = false) : BookCommand
     /** "продовж читати"; [bare] — просто "продовжуй"/"далі": книга — лише якщо щойно читали. */
     data class Continue(val bare: Boolean) : BookCommand
     data object List : BookCommand
@@ -45,10 +45,13 @@ object BookCommands {
         if (list.containsMatchIn(t)) return BookCommand.List
         read.find(t)?.let { m ->
             val explicit = m.groupValues[1].isNotEmpty()
-            val title = m.groupValues[2].replace(Regex("\\s+(?:вголос|будь\\s+ласка)$"), "").trim()
+            var title = m.groupValues[2].replace(Regex("\\s+(?:вголос|будь\\s+ласка)$"), "").trim()
+            // "почитай книгу Clean Code українською" — у перекладі.
+            val translate = Regex("(?:^|\\s)(?:(?:в|у)\\s+перекладі\\s*)?(?:на\\s+)?українськ\\p{L}*$|(?:^|\\s)(?:в|у)\\s+перекладі$").containsMatchIn(title)
+            if (translate) title = title.replace(Regex("(?:\\s+|^)(?:(?:в|у)\\s+перекладі\\s*)?(?:на\\s+)?(?:українськ\\p{L}*)?$"), "").trim()
             // "увімкни" — лише з "книгу" (інакше це музика, світло, телевізор).
             if (!explicit && (t.startsWith("увімкни") || notBook.containsMatchIn(title))) return null
-            return BookCommand.Read(title.ifEmpty { null }, explicit)
+            return BookCommand.Read(title.ifEmpty { null }, explicit, translate)
         }
         return null
     }

@@ -129,6 +129,8 @@ dependencies {
     // Розпізнавання тексту PDF-сканів (Tesseract, офлайн). Однопотоковий варіант: OpenMP забрав би
     // всі ядра, а поруч працює синтез мовлення. Словник (ukr) завантажується окремо, див. Ocr.
     implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
+    // Переклад англійська/російська ↔ українська офлайн (моделі ~30 МБ завантажуються за потреби).
+    implementation("com.google.mlkit:translate:17.0.3")
 
     testImplementation("junit:junit:4.13.2")
     // Справжній org.json для JVM-тестів (в android.jar лише заглушки).
