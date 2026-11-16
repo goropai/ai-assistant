@@ -140,6 +140,7 @@ class FacesTest {
         assertEquals("Валя", LocalCommands.parseName("Валя", answer = true))
         assertEquals("Валя", LocalCommands.parseName("я Валя", answer = true))
         assertNull(LocalCommands.parseName("не скажу", answer = true))
+        assertNull(LocalCommands.parseName("спіть", answer = true)) // офлайн-слух так чує "Спіді"
         assertNull(LocalCommands.parseName("розкажи мені щось цікаве про космос", answer = true))
         assertEquals("Тарас", LocalCommands.parseName("насправді мене звати Тарас"))
         assertEquals("Тарас", LocalCommands.parseName("називай мене Тарас"))

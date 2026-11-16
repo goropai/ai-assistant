@@ -35,8 +35,13 @@ class VoiceListener(
     private val onFatalError: (String) -> Unit,
     /** Хтось заговорив — можна заздалегідь відкрити з'єднання з "мозком". */
     private val onVoice: () -> Unit = {},
-    /** Офлайн-слух (Vosk): якщо готовий — розпізнаємо без інтернету, Google — запасний. */
+    /** Офлайн-слух (Vosk) — запасний: лише коли [useOffline] (немає інтернету). */
     private val offline: OfflineEar? = null,
+    /**
+     * Чи слухати офлайн. На Galaxy J5 Vosk розпізнає гірше й повільніше за Google
+     * (4–10 с на фразу, губить слова), тож він — лише на випадок, коли інтернету немає.
+     */
+    private val useOffline: () -> Boolean = { true },
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -75,7 +80,7 @@ class VoiceListener(
         if (active) return
         active = true
         // Офлайн-слух бере звук із буфера вартового (з запасом 0.6 с) — окремий "одразу" не потрібен.
-        if (listenNow && offline?.ready != true) startSession() else startGuard()
+        if (listenNow && !offlineNow()) startSession() else startGuard()
     }
 
     fun stop() {
@@ -142,7 +147,7 @@ class VoiceListener(
                 preroll.addLast(buffer)
                 if (preroll.size > PREROLL_FRAMES) preroll.removeFirst()
                 if (!gate.feed(SoundGate.levelDb(buffer, n))) continue
-                val ear = offline?.takeIf { it.ready }
+                val ear = offline?.takeIf { offlineNow() }
                 if (ear == null) {
                     handler.post { onVoiceDetected() }
                     break
@@ -157,6 +162,8 @@ class VoiceListener(
             record.release()
         }
     }
+
+    private fun offlineNow(): Boolean = offline?.ready == true && useOffline()
 
     /** Одна фраза через Vosk: спершу буфер, далі живий звук, поки модель не скаже "кінець фрази". */
     private fun recognizeOffline(ear: OfflineEar, record: AudioRecord, preroll: ArrayDeque<ShortArray>) {

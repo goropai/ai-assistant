@@ -184,7 +184,8 @@ class MainActivity : AppCompatActivity() {
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
             earsFactory = { onPhrase ->
-                VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar).also {
+                VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar,
+                    useOffline = { networkLost || connectivity.activeNetwork == null }).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
                 }
             },
