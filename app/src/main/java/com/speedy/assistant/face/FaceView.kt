@@ -55,7 +55,15 @@ class FaceView @JvmOverloads constructor(
         setBackgroundColor(Color.BLACK)
     }
 
+    /** Міні-копія поверх інших застосунків — повторює все, що робить це обличчя. */
+    var mirror: FaceView? = null
+        set(value) {
+            field = value
+            value?.let { m -> m.setMood(mood); m.setSpeaking(speaking); m.setBrainStatus(brainStatus) }
+        }
+
     fun setMood(newMood: Mood) {
+        mirror?.setMood(newMood)
         if (newMood == mood) return
         mood = newMood
         animateTo(EyeShape.of(newMood))
@@ -64,6 +72,7 @@ class FaceView @JvmOverloads constructor(
     }
 
     fun setSpeaking(value: Boolean) {
+        mirror?.setSpeaking(value)
         if (speaking == value) return
         speaking = value
         postInvalidateOnAnimation()
@@ -71,12 +80,14 @@ class FaceView @JvmOverloads constructor(
 
     /** Подивитися в точку (-1..1, x вправо, y вниз) — напр. на людину в кадрі. */
     fun lookAt(x: Float, y: Float) {
+        mirror?.lookAt(x, y)
         lookUntil = SystemClock.uptimeMillis() + LOOK_HOLD_MS
         animateTo(EyeShape.of(mood).withGaze(x.coerceIn(-1f, 1f) * 0.6f, y.coerceIn(-1f, 1f) * 0.4f))
     }
 
     /** Тьмяна крапка внизу: зелена — "мозок" на зв'язку, червона — ні, жовта — немає ключа. */
     fun setBrainStatus(status: com.speedy.assistant.brain.BrainStatus) {
+        mirror?.setBrainStatus(status)
         if (status == brainStatus) return
         brainStatus = status
         invalidate()

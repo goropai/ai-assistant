@@ -283,8 +283,25 @@ class MainActivity : AppCompatActivity() {
         else watcher.stop()
     }
 
+    /** Спіді не на екрані, але керує застосунками — її міні-копія в кутку. */
+    private fun showMiniSpeedy() {
+        val hands = com.speedy.assistant.phone.SpeedyHands.instance ?: return
+        hands.showMini(
+            create = { ctx -> FaceView(ctx).also { face.mirror = it } },
+            onTap = {
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
+            },
+        )
+    }
+
+    private fun hideMiniSpeedy() {
+        face.mirror = null
+        com.speedy.assistant.phone.SpeedyHands.instance?.hideMini()
+    }
+
     override fun onResume() {
         super.onResume()
+        hideMiniSpeedy()
         hideSystemUi()
         assistant?.start()
         resumed = true
@@ -295,7 +312,7 @@ class MainActivity : AppCompatActivity() {
         resumed = false
         updatePresence()
         // Керування застосунками увімкнено — слухаємо й у фоні ("натисни…", "повернись").
-        if (com.speedy.assistant.phone.SpeedyHands.instance == null) assistant?.stop()
+        if (com.speedy.assistant.phone.SpeedyHands.instance == null) assistant?.stop() else showMiniSpeedy()
         super.onPause()
     }
 

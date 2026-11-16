@@ -21,6 +21,7 @@ class SpeedyHands : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        hideMini()
         if (instance === this) instance = null
         super.onDestroy()
     }
@@ -96,6 +97,78 @@ class SpeedyHands : AccessibilityService() {
         Log.i(TAG, "вводжу текст у ${currentApp()}")
         val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
         return f.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private var overlay: android.view.View? = null
+    private var overlayParams: android.view.WindowManager.LayoutParams? = null
+
+    /**
+     * Міні-копія Спіді в кутку поверх будь-якого застосунку. Дотик — повернути Спіді,
+     * перетягування — посунути. [create] отримує контекст служби (вікно мусить бути її).
+     */
+    fun showMini(create: (Context) -> android.view.View, onTap: () -> Unit) {
+        if (overlay != null) return
+        val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
+        val density = resources.displayMetrics.density
+        val params = android.view.WindowManager.LayoutParams(
+            (140 * density).toInt(), (90 * density).toInt(),
+            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = android.view.Gravity.TOP or android.view.Gravity.END
+            x = (12 * density).toInt()
+            y = (60 * density).toInt()
+        }
+        val view = create(this).apply {
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(android.graphics.Color.BLACK)
+                cornerRadius = 18 * density
+                setStroke((1 * density).toInt(), 0xFF333333.toInt())
+            }
+            clipToOutline = true
+            elevation = 8 * density
+        }
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        var moved = false
+        view.setOnTouchListener { _, e ->
+            when (e.action) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY; startX = params.x; startY = params.y; moved = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 12 * density) moved = true
+                    if (moved) {
+                        params.x = (startX - dx).toInt() // gravity END: x рахується від правого краю
+                        params.y = (startY + dy).toInt()
+                        wm.updateViewLayout(view, params)
+                    }
+                }
+                android.view.MotionEvent.ACTION_UP -> if (!moved) onTap()
+            }
+            true
+        }
+        try {
+            wm.addView(view, params)
+            overlay = view
+            overlayParams = params
+        } catch (e: Exception) {
+            Log.w(TAG, "міні-Спіді не показується: ${e.message}")
+        }
+    }
+
+    fun hideMini() {
+        val view = overlay ?: return
+        overlay = null
+        try {
+            (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(view)
+        } catch (_: Exception) {}
     }
 
     fun back() = performGlobalAction(GLOBAL_ACTION_BACK)
