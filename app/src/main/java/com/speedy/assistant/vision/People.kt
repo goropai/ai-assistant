@@ -27,6 +27,9 @@ class People(private val book: FaceBook) {
     @Synchronized
     fun forget(name: String): Boolean = book.forget(name)
 
+    @Synchronized
+    fun knows(name: String): Boolean = name in book.names
+
     /**
      * Людина в кадрі — насправді [name] (назвалась жартома або її сплутали з кимось).
      * false — обличчя щойно не було видно.

@@ -54,6 +54,7 @@ class Assistant(
     private val memory: com.speedy.assistant.brain.Memory? = null,
     private val phone: com.speedy.assistant.phone.PhoneActions? = null,
     private val currency: com.speedy.assistant.weather.Currency? = null,
+    private val profiles: com.speedy.assistant.people.Profiles? = null,
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
@@ -164,7 +165,8 @@ class Assistant(
     private suspend fun greetKnown(name: String) {
         face.setMood(Mood.HAPPY)
         chirps.play(Chirp.HAPPY)
-        say(listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random())
+        val hint = profiles?.greetingHint(name, System.currentTimeMillis())?.let { " $it" }.orEmpty()
+        say(listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random() + hint)
         face.setMood(Mood.LISTENING)
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
     }
@@ -197,7 +199,7 @@ class Assistant(
                     say("Так, я знаю, ти $name!")
                 }
                 // Назвався жартома, а тепер каже справжнє ім'я — переносимо саме це обличчя.
-                known.size == 1 && p.reassign(name, now) -> {
+                known.size == 1 && p.reassign(name, now).also { ok -> if (ok) moveProfiles(known, name) } -> {
                     face.setMood(Mood.HAPPY)
                     chirps.play(Chirp.HAPPY)
                     say("Добре, тепер я знаю, що ти $name, а не ${known.first()}.")
@@ -369,7 +371,8 @@ class Assistant(
             LocalCommand.CORRECT_NAME -> {
                 val (wrong, right) = LocalCommands.parseCorrection(command) ?: return say("Не розчула. Скажи ще раз?")
                 val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
-                if (!p.reassign(right, SystemClock.uptimeMillis())) {
+                val before = p.presentNames(SystemClock.uptimeMillis())
+                if (!p.reassign(right, SystemClock.uptimeMillis()).also { ok -> if (ok) moveProfiles(before, right) }) {
                     face.setMood(Mood.THINKING)
                     return say("Подивись на мене, щоб я побачила обличчя, і скажи ще раз.")
                 }
@@ -390,8 +393,14 @@ class Assistant(
                 val name = people?.presentNames(SystemClock.uptimeMillis())?.firstOrNull()
                     ?: return say("Я не бачу, кого забути. Подивись на мене.")
                 people.forget(name)
+                profiles?.forget(name)
                 face.setMood(Mood.SAD)
                 return say("Добре, я забула тебе, $name.")
+            }
+            LocalCommand.ABOUT_ME -> {
+                val name = partner() ?: return askName()
+                face.setMood(Mood.HAPPY)
+                return say(profiles?.describe(name, System.currentTimeMillis()) ?: "Я знаю, що ти $name!")
             }
             LocalCommand.WHO_AM_I -> {
                 val name = people?.presentNames(SystemClock.uptimeMillis())?.firstOrNull()
@@ -415,6 +424,18 @@ class Assistant(
             }
             null -> {}
         }
+        // "Я люблю каву" — у профіль без моделі; коротке твердження — і відповідаємо самі.
+        com.speedy.assistant.people.SelfFacts.extract(command)?.let { fact ->
+            val name = partner()
+            if (name != null && profiles != null) {
+                profiles.addFact(name, fact, System.currentTimeMillis())
+                Log.i(TAG, "запам'ятала про $name: $fact")
+                if (com.speedy.assistant.people.SelfFacts.isPlainStatement(command)) {
+                    face.setMood(Mood.HAPPY)
+                    return say(listOf("Запам'ятала!", "Ага, запам'ятаю, $name.", "Цікаво! Запам'ятала.").random())
+                }
+            }
+        }
         // Дії на телефоні — без моделі; якщо не вийшло (нема такого застосунку) — далі до моделі.
         com.speedy.assistant.phone.PhoneCommands.parse(command)?.let { if (handlePhone(it)) return }
         com.speedy.assistant.weather.Currency.parse(command)?.let { code -> if (tellRate(code)) return }
@@ -428,7 +449,7 @@ class Assistant(
         // Агентний цикл: модель може подивитись, поїхати й знову подивитись, поки не досягне мети.
         while (true) {
             val action = reply.action
-            if (reply.remember.isNotBlank() && memory?.add(reply.remember) == true) Log.i(TAG, "запам'ятала: ${reply.remember}")
+            if (reply.remember.isNotBlank()) rememberFact(reply.remember)
             when (action.type) {
                 "search" -> {
                     if (searches++ >= Brain.MAX_SEARCHES || action.query.isBlank() || webSearch == null) return speak(reply)
@@ -494,6 +515,23 @@ class Assistant(
                 else -> return speak(reply)
             }
         }
+    }
+
+    /** Ім'я зникло (жартівливе) — його профіль переходить до правильного імені. */
+    private fun moveProfiles(oldNames: List<String>, newName: String) {
+        val p = people ?: return
+        oldNames.filter { it != newName && !p.knows(it) }.forEach { profiles?.rename(it, newName) }
+    }
+
+    /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */
+    private fun partner(): String? = people?.presentNames(SystemClock.uptimeMillis())?.singleOrNull()
+
+    /** Факт — у профіль співрозмовника, а якщо його не знаємо — у загальну пам'ять. */
+    private fun rememberFact(fact: String) {
+        val name = partner()
+        val stored = if (name != null && profiles != null) profiles.addFact(name, fact, System.currentTimeMillis())
+        else memory?.add(fact) == true
+        if (stored) Log.i(TAG, "запам'ятала${name?.let { " про $it" }.orEmpty()}: $fact")
     }
 
     /** @return false — не впоралась локально, хай відповідає модель. */

@@ -139,13 +139,22 @@ class MainActivity : AppCompatActivity() {
         speaker = voice
         val people = People(FaceBook(java.io.File(filesDir, "faces.json")))
         val pets = com.speedy.assistant.vision.Pets(java.io.File(filesDir, "pets.json"))
-        presence = PresenceWatcher(this, this, people, pets) { events -> assistant?.onPresence(events) }
+        val profiles = com.speedy.assistant.people.Profiles(java.io.File(filesDir, "profiles.json"))
+        presence = PresenceWatcher(this, this, people, pets, profiles) { events -> assistant?.onPresence(events) }
 
         assistant = Assistant(
             scope = lifecycleScope,
             face = face,
             voice = voice,
-            brain = Brain(llm, presence = { presence?.summary.orEmpty() }, memory = { memory.all() }),
+            brain = Brain(
+                llm,
+                presence = { presence?.summary.orEmpty() },
+                memory = { memory.all() },
+                about = {
+                    people.presentNames(android.os.SystemClock.uptimeMillis()).singleOrNull()
+                        ?.let { profiles.summary(it, System.currentTimeMillis()) }.orEmpty()
+                },
+            ),
             camera = CameraSnapshot(this, this),
             robot = robot,
             findRobot = { robot.rediscover() },
@@ -160,6 +169,7 @@ class MainActivity : AppCompatActivity() {
             memory = memory,
             phone = com.speedy.assistant.phone.PhoneActions(this),
             currency = com.speedy.assistant.weather.Currency(http),
+            profiles = profiles,
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
             earsFactory = { onPhrase ->

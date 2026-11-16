@@ -23,6 +23,8 @@ class Brain(
     private val presence: () -> String = { "" },
     /** Факти з довготривалої пам'яті — додаються до системного промпту. */
     private val memory: () -> List<String> = { emptyList() },
+    /** Що Спіді знає про співрозмовника (локальний профіль) — у повідомленні, кеш не страждає. */
+    private val about: () -> String = { "" },
 ) {
     private val history = ArrayList<Turn>()
     private var lastAsk = Long.MIN_VALUE / 2
@@ -43,7 +45,8 @@ class Brain(
         val parts = buildList {
             image?.let { add(Part.Image(it)) }
             val nearby = presence().takeIf { it.isNotBlank() }?.let { " [поруч: $it]" }.orEmpty()
-            add(Part.Text("[${clock.format(Date())}]$nearby $text"))
+            val known = about().takeIf { it.isNotBlank() }?.let { " [про співрозмовника: $it]" }.orEmpty()
+            add(Part.Text("[${clock.format(Date())}]$nearby$known $text"))
         }
         history += Turn(Role.USER, parts)
         val stream = onSentence?.let { SayStream(onMood, it) }
@@ -131,8 +134,11 @@ class Brain(
             - "stop": негайно зупинитись.
             - "none": просто відповісти.
 
-            Поле "remember": якщо дізналась щось варте памʼяті надовго (імʼя, вподобання, важливу дату,
-            хто кому ким доводиться) — коротко запиши факт ("Тарас любить каву"), інакше порожній рядок.
+            [про співрозмовника: …] — що ти вже знаєш про того, хто говорить: вподобання, звички, одяг.
+            Використовуй природно, коли доречно, але не перелічуй це.
+            Поле "remember": якщо дізналась про співрозмовника щось варте памʼяті надовго (вподобання,
+            звичку, роботу, важливу дату, кого як звуть із рідних) — коротко, у третій особі без імені
+            ("любить каву", "має сестру Оксану"); інакше порожній рядок.
 
             Відповідай ЛИШЕ JSON-об'єктом такого вигляду:
             {"mood": "neutral|happy|sad|angry|surprised|sleepy|thinking|listening", "say": "що промовити",

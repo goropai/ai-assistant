@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { END_CONVERSATION, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { END_CONVERSATION, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -39,6 +39,7 @@ object LocalCommands {
             "називай\\s+мене|клич\\s+мене|звертайся\\s+до\\s+мене)\\s+(\\p{L}[\\p{L}'’-]*)",
     )
     private val forgetMe = Regex("^забудь\\s+(мене|моє\\s+обличчя)")
+    private val aboutMe = Regex("що\\s+ти\\s+(?:про\\s+мене\\s+)?(?:знаєш|пам.ятаєш)(?:\\s+про\\s+мене)?|розкажи\\s+(?:що\\s+)?(?:ти\\s+)?знаєш\\s+про\\s+мене")
     private val whoAmI = Regex("^(хто\\s+я|ти\\s+мене\\s+знаєш|ти\\s+мене\\s+пам.ятаєш|як\\s+мене\\s+звати)")
     private val notNames = setOf("не", "ні", "ніяк", "нічого", "неважливо", "секрет", "відстань", "стоп", "так", "що")
 
@@ -106,6 +107,7 @@ object LocalCommands {
             correction.containsMatchIn(text) && parseCorrection(text) != null -> LocalCommand.CORRECT_NAME
             introduce.containsMatchIn(text) -> LocalCommand.INTRODUCE
             forgetMe.containsMatchIn(text) -> LocalCommand.FORGET_ME
+            aboutMe.containsMatchIn(text) && "мене" in text -> LocalCommand.ABOUT_ME
             whoAmI.containsMatchIn(text) -> LocalCommand.WHO_AM_I
             where.containsMatchIn(text) -> LocalCommand.WHERE
             com.speedy.assistant.weather.WeatherText.isWeatherQuestion(text) -> LocalCommand.WEATHER

@@ -32,6 +32,8 @@ class PresenceWatcher(
     private val people: People? = null,
     /** Імена домашніх тварин; null — не запам'ятовуємо. */
     private val pets: Pets? = null,
+    /** Локальні профілі знайомих: візити, одяг. */
+    private val profiles: com.speedy.assistant.people.Profiles? = null,
     private val onEvents: (List<PresenceEvent>) -> Unit,
 ) {
     private val executor = Executors.newSingleThreadExecutor()
@@ -44,6 +46,8 @@ class PresenceWatcher(
     private var facesBroken = false
     private var lastRun = 0L
     private var lastKinds = emptySet<Kind>()
+    private val lastProfileUpdate = HashMap<String, Long>()
+    private var clothingCandidate: Pair<String, Int>? = null
     /** Прив'язка камери асинхронна: між start() і готовністю провайдера могли викликати stop(). */
     private var wanted = false
     private var binding = false
@@ -153,6 +157,7 @@ class PresenceWatcher(
                 }
             }
             val names = people?.presentNames(now).orEmpty()
+            if (profiles != null && names.size == 1) noteKnownPerson(names.first(), frame, detections, now)
             val petsNear = petNames.map { (kind, name) -> "${kind.ua} $name" }
             summary = (names + petsNear + tracker.summary()).filter { s -> s.isNotBlank() }.joinToString(", ")
             if (events.isNotEmpty()) main.post { onEvents(events) }
@@ -169,6 +174,26 @@ class PresenceWatcher(
             broken = true
             main.post { stop() }
             null
+        }
+    }
+
+    /** Поруч одна знайома людина: візит (не частіше разу на хвилину) і колір верху (3 кадри поспіль). */
+    private fun noteKnownPerson(name: String, frame: Bitmap, detections: List<Detection>, now: Long) {
+        val profiles = profiles ?: return
+        val wall = System.currentTimeMillis()
+        if (now - (lastProfileUpdate[name] ?: Long.MIN_VALUE / 2) >= 60_000) {
+            lastProfileUpdate[name] = now
+            profiles.seen(name, wall)
+        }
+        val persons = detections.filter { d -> d.score >= SCORE_THRESHOLD && Kind.fromCoco(d.cocoClass) == Kind.PERSON }
+        if (persons.size != 1) return
+        val d = persons.first()
+        val color = com.speedy.assistant.people.Clothing.color(frame, d.left, d.top, d.right, d.bottom) ?: return
+        val streak = clothingCandidate?.takeIf { it.first == color }?.second?.plus(1) ?: 1
+        clothingCandidate = color to streak
+        if (streak == 3) {
+            Log.i(TAG, "$name сьогодні в $color")
+            profiles.clothing(name, color, wall)
         }
     }
 
