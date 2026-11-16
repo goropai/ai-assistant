@@ -17,16 +17,17 @@ import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 
 /**
- * Офлайн-слух: Vosk з українською моделлю vosk-model-small-uk-v3-nano (Apache 2.0, 78 МБ).
+ * Офлайн-слух: Vosk з українською моделлю vosk-model-small-uk-v3-small (Apache 2.0, 144 МБ).
  * Модель не в APK — завантажується один раз з alphacephei.com і перевіряється за SHA-256.
- * Слова "спіді" в словнику моделі немає — вона чує "спід і" (див. [WakeWord]).
+ * (Модель nano на мікрофоні Galaxy J5 майже нічого не розбирала й не знала слова "спіді".)
  */
 class OfflineEar(private val context: Context) {
     private val dir = File(context.filesDir, "vosk-uk")
     @Volatile private var model: Model? = null
 
     val ready: Boolean get() = model != null
-    val downloaded: Boolean get() = File(dir, READY_MARK).exists()
+    /** Розпакована саме поточна модель (позначка містить її SHA-256 — стара модель замінюється). */
+    val downloaded: Boolean get() = File(dir, READY_MARK).let { it.exists() && it.readText() == SHA256 }
 
     /** Завантажити (якщо ще немає) і підняти модель. Довго — викликати у фоні. */
     suspend fun prepare(http: OkHttpClient) = withContext(Dispatchers.IO) {
@@ -118,12 +119,12 @@ class OfflineEar(private val context: Context) {
     companion object {
         private const val TAG = "OfflineEar"
         const val RATE = 16000
-        private const val URL = "https://alphacephei.com/vosk/models/vosk-model-small-uk-v3-nano.zip"
-        private const val SHA256 = "d6b50be0a2d20f891720f3a83c98290bb2d396fd666142dbf716e8ad302f8233"
-        private const val SIZE = 77_622_640L
+        private const val URL = "https://alphacephei.com/vosk/models/vosk-model-small-uk-v3-small.zip"
+        private const val SHA256 = "ee05b6a8c796c53c61cd1c821d38e897e5bd67b4d691d8797ec8f9e5100d4247"
+        private const val SIZE = 143_914_407L
         private const val READY_MARK = ".ready"
         /** Ім'я архіву для ручного встановлення: adb push … /sdcard/Android/data/<пакет>/files/ */
-        const val ZIP_NAME = "vosk-model-small-uk-v3-nano.zip"
+        const val ZIP_NAME = "vosk-model-small-uk-v3-small.zip"
 
         /** Варіанти розпізнаного тексту з результату Vosk (alternatives або text). */
         fun phrases(json: String): List<String> {
