@@ -565,8 +565,14 @@ class Assistant(
                     if (looks++ >= MAX_LOOKS) return speak(reply)
                     if (reply.say.isNotBlank()) speak(reply)
                     face.setMood(Mood.THINKING)
-                    val jpeg = photo(action.camera) ?: return
-                    reply = ask(Brain.cameraFollowUp(action.camera), jpeg)
+                    if (action.camera == "both") {
+                        val front = photo("forward") ?: return
+                        val back = photo("backward") ?: return
+                        reply = ask(Brain.cameraFollowUp("both"), front, listOf(back))
+                    } else {
+                        val jpeg = photo(action.camera) ?: return
+                        reply = ask(Brain.cameraFollowUp(action.camera), jpeg)
+                    }
                 }
                 "move" -> {
                     val direction = Direction.parse(action.direction) ?: return speak(reply)
@@ -869,7 +875,7 @@ class Assistant(
      * Потоковий запит: кожне готове речення відповіді одразу йде в мовлення, поки модель
      * дописує решту; настрій — щойно відомий. У лог — затримка до першого слова й загальна.
      */
-    private suspend fun ask(text: String, image: ByteArray? = null): AgentReply = coroutineScope {
+    private suspend fun ask(text: String, image: ByteArray? = null, extraImages: List<ByteArray> = emptyList()): AgentReply = coroutineScope {
         val started = SystemClock.uptimeMillis()
         var firstWord = 0L
         val sentences = Channel<String>(Channel.UNLIMITED)
@@ -882,7 +888,7 @@ class Assistant(
         val reply = try {
             askBrain {
                 brain.ask(
-                    text, image,
+                    text, image, extraImages,
                     onMood = { mood -> launch { face.setMood(Mood.parse(mood)) } },
                     onSentence = { sentences.trySend(it) },
                 )

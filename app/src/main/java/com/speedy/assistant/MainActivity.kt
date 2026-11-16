@@ -166,6 +166,7 @@ class MainActivity : AppCompatActivity() {
                 llm,
                 presence = { presence?.summary.orEmpty() },
                 memory = { memory.all() },
+                scene = { presence?.scene.orEmpty() },
                 about = {
                     people.presentNames(android.os.SystemClock.uptimeMillis()).singleOrNull()
                         ?.let { profiles.summary(it, System.currentTimeMillis()) }.orEmpty()

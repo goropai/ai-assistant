@@ -58,6 +58,10 @@ class PresenceWatcher(
     @Volatile var summary: String = ""
         private set
 
+    /** Що ще в кадрі передньої камери ("чашка, ноутбук") — локально, без фото. */
+    @Volatile var scene: String = ""
+        private set
+
     /** Викликати з головного потоку. */
     fun start() {
         wanted = true
@@ -127,6 +131,8 @@ class PresenceWatcher(
                     area = (d.right - d.left) * (d.bottom - d.top),
                 )
             }
+            scene = detections.filter { d -> d.score >= SCORE_THRESHOLD && Kind.fromCoco(d.cocoClass) == null }
+                .mapNotNull { d -> CocoNames.ua(d.cocoClass) }.distinct().take(6).joinToString(", ")
             val kinds = sightings.map { s -> s.kind }.toSet()
             if (kinds != lastKinds) {
                 Log.i(TAG, "бачу: ${kinds.joinToString { k -> k.ua }.ifEmpty { "нікого" }} " +

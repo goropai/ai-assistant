@@ -25,6 +25,8 @@ class Brain(
     private val memory: () -> List<String> = { emptyList() },
     /** Що Спіді знає про співрозмовника (локальний профіль) — у повідомленні, кеш не страждає. */
     private val about: () -> String = { "" },
+    /** Предмети в кадрі передньої камери (локальний детектор). */
+    private val scene: () -> String = { "" },
 ) {
     private val history = ArrayList<Turn>()
     private var lastAsk = Long.MIN_VALUE / 2
@@ -37,6 +39,8 @@ class Brain(
     suspend fun ask(
         text: String,
         image: ByteArray? = null,
+        /** Додаткові кадри (напр. задня камера разом із передньою). */
+        extraImages: List<ByteArray> = emptyList(),
         onMood: (String) -> Unit = {},
         onSentence: ((String) -> Unit)? = null,
     ): AgentReply {
@@ -44,9 +48,11 @@ class Brain(
         lastAsk = now()
         val parts = buildList {
             image?.let { add(Part.Image(it)) }
+            extraImages.forEach { add(Part.Image(it)) }
             val nearby = presence().takeIf { it.isNotBlank() }?.let { " [поруч: $it]" }.orEmpty()
             val known = about().takeIf { it.isNotBlank() }?.let { " [про співрозмовника: $it]" }.orEmpty()
-            add(Part.Text("[${clock.format(Date())}]$nearby$known $text"))
+            val sees = scene().takeIf { it.isNotBlank() }?.let { " [бачу: $it]" }.orEmpty()
+            add(Part.Text("[${clock.format(Date())}]$nearby$sees$known $text"))
         }
         history += Turn(Role.USER, parts)
         val stream = onSentence?.let { SayStream(onMood, it) }
@@ -91,7 +97,10 @@ class Brain(
             if (result == null) "[система] Пошук \"$query\" не вдався. Чесно скажи, що не змогла знайти, і відповідай з того, що знаєш."
             else "[система] Результат пошуку \"$query\":\n$result\nВідповідай на попереднє питання коротко, своїми словами, голосом."
 
-        fun cameraFollowUp(camera: String) =
+        fun cameraFollowUp(camera: String) = if (camera == "both")
+            "[система] Ось два кадри: перший — з камери спереду (з боку твоїх очей, де співрозмовник), " +
+                "другий — із задньої камери (кімната за твоєю спиною). Дай відповідь на попередній запит, спираючись на них."
+        else
             "[система] Ось кадр із ${if (camera == "backward") "задньої камери" else "камери спереду (з боку твоїх очей)"}. " +
                 "Дай відповідь на попередній запит, спираючись на зображення."
 
@@ -119,9 +128,11 @@ class Brain(
             зупиняється перед перешкодою ближче 25 см і не їде на неї.
 
             Можливості (поле action):
-            - "look": подивитися камерою. camera "forward" — камера з боку очей: бачить співрозмовника,
-              а на платформі — дорогу попереду; "backward" — камера ззаду. Отримаєш кадр і відповіси ще раз.
-              Використовуй, коли питають, що ти бачиш, хто перед тобою, що це за предмет тощо.
+            - "look": подивитися камерою й отримати фото. camera "forward" — камера з боку очей: бачить
+              співрозмовника й те, що він показує, а на платформі — дорогу попереду; "backward" — задня камера:
+              кімната за твоєю спиною, тобто те, що співрозмовник бачить перед собою; "both" — обидві разом.
+              "forward" — "хто я", "що це в мене в руках"; "backward" — "що там позаду тебе", "що за вікном",
+              "подивись на кімнату"; "both" — "що навколо", "роздивись усе". Отримаєш фото і відповіси ще раз.
             - "move": поїхати (direction forward/backward/left/right, duration_ms до 3000; left/right —
               поворот на місці). then_look=true — після руху отримаєш новий кадр спереду і звіт датчика,
               щоб вирішити наступний крок. Так виконуй завдання на кшталт "під'їдь до кота", "знайди м'яч":
@@ -134,15 +145,17 @@ class Brain(
             - "stop": негайно зупинитись.
             - "none": просто відповісти.
 
-            [про співрозмовника: …] — що ти вже знаєш про того, хто говорить: вподобання, звички, одяг.
-            Використовуй природно, коли доречно, але не перелічуй це.
+            [про співрозмовника: …] — що ти вже знаєш про того, хто говорить: вподобання, звички.
+            [бачу: …] — предмети, які зараз бачить твоя передня камера (без фото).
+            Згадуй це природно й зрідка, коли доречно, — не в кожній репліці й не перелічуй.
+            Про одяг людини говори, лише якщо про нього питають.
             Поле "remember": якщо дізналась про співрозмовника щось варте памʼяті надовго (вподобання,
             звичку, роботу, важливу дату, кого як звуть із рідних) — коротко, у третій особі без імені
             ("любить каву", "має сестру Оксану"); інакше порожній рядок.
 
             Відповідай ЛИШЕ JSON-об'єктом такого вигляду:
             {"mood": "neutral|happy|sad|angry|surprised|sleepy|thinking|listening", "say": "що промовити",
-             "action": {"type": "none|look|move|stop|search", "camera": "none|forward|backward",
+             "action": {"type": "none|look|move|stop|search", "camera": "none|forward|backward|both",
                         "direction": "none|forward|backward|left|right", "duration_ms": 0, "then_look": false,
                         "query": ""},
              "remember": ""}

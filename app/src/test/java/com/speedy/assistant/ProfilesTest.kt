@@ -65,9 +65,11 @@ class ProfilesTest {
         val p = Profiles(null, utc)
         p.clothing("Тарас", "синьому", at(0, 10))
         p.clothing("Тарас", "червоному", at(1, 10))
-        assertTrue(p.summary("Тарас", at(1, 11)).contains("сьогодні в червоному"))
+        // Моделі одяг не передаємо (інакше говорить про нього щоразу) — лише у відповіді "що знаєш" і вітанні.
+        assertFalse(p.summary("Тарас", at(1, 11)).contains("червоному"))
+        assertTrue(p.describe("Тарас", at(1, 11)).contains("Сьогодні ти в червоному"))
         assertEquals("Ти сьогодні в червоному!", p.greetingHint("Тарас", at(1, 11)))
-        assertFalse(p.summary("Тарас", at(2, 11)).contains("сьогодні")) // учорашній одяг — не сьогоднішній
+        assertFalse(p.describe("Тарас", at(2, 11)).contains("Сьогодні")) // учорашній одяг — не сьогоднішній
     }
 
     @Test

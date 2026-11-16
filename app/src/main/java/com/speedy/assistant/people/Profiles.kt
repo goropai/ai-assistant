@@ -96,7 +96,7 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         val parts = mutableListOf<String>()
         parts += p.facts.takeLast(8)
         habit(p)?.let { parts += it }
-        if (p.clothing != null && dayOf(p.clothingAt) == dayOf(now)) parts += "сьогодні в ${p.clothing}"
+        // Одяг моделі не передаємо: інакше вона говорить про нього щоразу (лишається в describe і вітанні).
         absence(p, now)?.let { parts += it }
         return parts.joinToString("; ")
     }

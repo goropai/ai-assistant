@@ -56,6 +56,7 @@ data class AgentReply(
         fun normalizeCamera(value: String?): String = when (value?.lowercase()) {
             "forward", "front" -> "forward"
             "backward", "back" -> "backward"
+            "both" -> "both"
             else -> "none"
         }
 
@@ -69,7 +70,7 @@ data class AgentReply(
                 .put(
                     "properties", JSONObject()
                         .put("type", enumOf("none", "look", "move", "stop", "search"))
-                        .put("camera", enumOf("none", "forward", "backward"))
+                        .put("camera", enumOf("none", "forward", "backward", "both"))
                         .put("direction", enumOf("none", "forward", "backward", "left", "right"))
                         .put("duration_ms", JSONObject().put("type", "integer"))
                         .put("then_look", JSONObject().put("type", "boolean"))
@@ -102,7 +103,7 @@ data class AgentReply(
                 .put(
                     "properties", JSONObject()
                         .put("type", enumOf("none", "look", "move", "stop", "search"))
-                        .put("camera", enumOf("none", "forward", "backward"))
+                        .put("camera", enumOf("none", "forward", "backward", "both"))
                         .put("direction", enumOf("none", "forward", "backward", "left", "right"))
                         .put("duration_ms", JSONObject().put("type", "INTEGER"))
                         .put("then_look", JSONObject().put("type", "BOOLEAN"))
