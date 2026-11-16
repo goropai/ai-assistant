@@ -70,6 +70,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val llm by lazy { ConfiguredLlm(http, settings) }
+    private val offlineEar by lazy { com.speedy.assistant.voice.OfflineEar(this) }
+    private val reminders by lazy { com.speedy.assistant.initiative.Reminders(java.io.File(filesDir, "reminders.json")) }
     private val memory by lazy { com.speedy.assistant.brain.Memory(java.io.File(filesDir, "memory.json")) }
     private val wikipedia by lazy { com.speedy.assistant.brain.Wikipedia(http) }
 
@@ -170,10 +172,11 @@ class MainActivity : AppCompatActivity() {
             phone = com.speedy.assistant.phone.PhoneActions(this),
             currency = com.speedy.assistant.weather.Currency(http),
             profiles = profiles,
+            reminders = reminders,
             weather = com.speedy.assistant.weather.WeatherService(http),
             locator = com.speedy.assistant.location.Locator(this),
             earsFactory = { onPhrase ->
-                VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain).also {
+                VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
                 }
             },
@@ -189,10 +192,34 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch { robot.rediscover() }
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         connectivity.registerDefaultNetworkCallback(networkCallback)
+        // Офлайн-слух: модель 78 МБ — завантажуємо лише через Wi-Fi (не мобільний трафік), один раз.
+        lifecycleScope.launch {
+            // Не вийшло (повільний сайт, немає Wi-Fi) — пробуємо знову кожні 10 хв; до того слухає Google.
+            while (isActive && !offlineEar.ready) {
+                if (offlineEar.downloaded || !connectivity.isActiveNetworkMetered) {
+                    try {
+                        offlineEar.prepare(http)
+                    } catch (e: Exception) {
+                        android.util.Log.w("MainActivity", "офлайн-слух недоступний: ${e.message}")
+                    }
+                }
+                if (!offlineEar.ready) delay(10 * 60_000)
+            }
+        }
         lifecycleScope.launch {
             while (isActive) {
                 face.setBrainStatus(llm.status())
                 delay(10 * 60_000)
+            }
+        }
+        // Нагадування: пропущені, поки застосунок був вимкнений (до 6 год), — одразу; далі — щохвилини 20 с.
+        lifecycleScope.launch {
+            reminders.takeDue(System.currentTimeMillis()).forEach { r ->
+                if (System.currentTimeMillis() - r.at < 6 * 3600_000L) assistant?.remind(r, late = true)
+            }
+            while (isActive) {
+                delay(20_000)
+                reminders.takeDue(System.currentTimeMillis()).forEach { assistant?.remind(it) }
             }
         }
         lifecycleScope.launch {

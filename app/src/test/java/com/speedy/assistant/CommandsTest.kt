@@ -48,6 +48,9 @@ class CommandsTest {
     fun wakeWordAtEnd() {
         assertEquals("А хто це там сидить", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("А хто це там сидить, Спіді")))
         assertEquals("котра година", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("Спіді, котра година")))
+        // Офлайн-модель (Vosk) не знає "спіді" і чує "спід і".
+        assertEquals("котра година", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("спід і котра година")))
+        assertEquals("", com.speedy.assistant.voice.WakeWord.extractCommand(listOf("спід і")))
         assertEquals(null, com.speedy.assistant.voice.WakeWord.extractCommand(listOf("я купив спідниці")))
     }
 

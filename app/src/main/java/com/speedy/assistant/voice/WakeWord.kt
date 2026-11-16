@@ -12,6 +12,8 @@ object WakeWord {
     // Лише після коми: "що там спіді" — про неї, а не до неї.
     private val trailing = Regex("\\s*,\\s*$NAME[\\s,.!?]*$", RegexOption.IGNORE_CASE)
 
+    private val LEADING_AND = Regex("^(?:і|ді|и)(?:\\s+|$)", RegexOption.IGNORE_CASE)
+
     private val pattern = Regex(
         "^(?:(?:гей|ей|хей|привіт|привет|hey)[\\s,!]+)?" +
             // "піді" — початок слова обрізався, поки вмикався розпізнавач.
@@ -26,7 +28,8 @@ object WakeWord {
     fun extractCommand(candidates: List<String>): String? {
         for (candidate in candidates) {
             val text = candidate.trim()
-            pattern.find(text)?.let { return text.substring(it.range.last + 1).trim() }
+            // Офлайн-модель не знає слова "спіді" і пише "спід і …" — сполучник прибираємо.
+            pattern.find(text)?.let { return text.substring(it.range.last + 1).trim().replace(LEADING_AND, "") }
             trailing.find(text)?.let { return text.substring(0, it.range.first).trim() }
         }
         return null

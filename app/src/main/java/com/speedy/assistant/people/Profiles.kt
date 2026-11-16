@@ -27,6 +27,8 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         var previousClothing: String? = null,
         /** Коли закінчився попередній візит (для "давно не бачились" на початку нового). */
         var previousVisitEnd: Long = 0,
+        /** День останнього ранкового підсумку. */
+        var briefedDay: Int = 0,
     )
 
     private val people = LinkedHashMap<String, Profile>()
@@ -112,6 +114,16 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         return null
     }
 
+    /** Чи пора ранкового підсумку (5:00–12:00, раз на день); якщо так — позначаємо. */
+    @Synchronized
+    fun takeMorningBriefing(name: String, now: Long): Boolean {
+        val p = people.getOrPut(name) { Profile(firstSeen = now) }
+        if (hourOf(now) !in 5..11 || p.briefedDay == dayOf(now)) return false
+        p.briefedDay = dayOf(now)
+        save()
+        return true
+    }
+
     @Synchronized
     fun rename(old: String, new: String) {
         val from = people.remove(old) ?: return
@@ -166,6 +178,7 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     clothingAt = o.optLong("clothingAt"),
                     previousClothing = o.optString("previousClothing").ifBlank { null },
                     previousVisitEnd = o.optLong("previousVisitEnd"),
+                    briefedDay = o.optInt("briefedDay"),
                 )
             }
         } catch (e: Exception) {
@@ -188,6 +201,7 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     .put("clothingAt", p.clothingAt)
                     .put("previousClothing", p.previousClothing.orEmpty())
                     .put("previousVisitEnd", p.previousVisitEnd)
+                    .put("briefedDay", p.briefedDay)
             )
         }
         f.writeText(json.toString())

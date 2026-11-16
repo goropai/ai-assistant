@@ -35,6 +35,8 @@ class VoiceListener(
     private val onFatalError: (String) -> Unit,
     /** Хтось заговорив — можна заздалегідь відкрити з'єднання з "мозком". */
     private val onVoice: () -> Unit = {},
+    /** Офлайн-слух (Vosk): якщо готовий — розпізнаємо без інтернету, Google — запасний. */
+    private val offline: OfflineEar? = null,
 ) {
     private val handler = Handler(Looper.getMainLooper())
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -72,7 +74,8 @@ class VoiceListener(
     fun start(listenNow: Boolean = false) {
         if (active) return
         active = true
-        if (listenNow) startSession() else startGuard()
+        // Офлайн-слух бере звук із буфера вартового (з запасом 0.6 с) — окремий "одразу" не потрібен.
+        if (listenNow && offline?.ready != true) startSession() else startGuard()
     }
 
     fun stop() {
@@ -128,20 +131,54 @@ class VoiceListener(
             return
         }
         val gate = SoundGate()
-        val buffer = ShortArray(FRAME)
+        // Останні ~0.6 с звуку: коли вартовий спрацював, початок фрази вже минув — віддаємо його Vosk.
+        val preroll = ArrayDeque<ShortArray>()
         try {
             record.startRecording()
             while (!Thread.currentThread().isInterrupted && guard === Thread.currentThread()) {
+                val buffer = ShortArray(FRAME)
                 val n = record.read(buffer, 0, FRAME)
                 if (n <= 0) continue
-                if (gate.feed(SoundGate.levelDb(buffer, n))) {
+                preroll.addLast(buffer)
+                if (preroll.size > PREROLL_FRAMES) preroll.removeFirst()
+                if (!gate.feed(SoundGate.levelDb(buffer, n))) continue
+                val ear = offline?.takeIf { it.ready }
+                if (ear == null) {
                     handler.post { onVoiceDetected() }
                     break
                 }
+                handler.post { onVoice() }
+                recognizeOffline(ear, record, preroll)
+                preroll.clear()
+                gate.reset()
             }
         } finally {
             try { record.stop() } catch (_: IllegalStateException) {}
             record.release()
+        }
+    }
+
+    /** Одна фраза через Vosk: спершу буфер, далі живий звук, поки модель не скаже "кінець фрази". */
+    private fun recognizeOffline(ear: OfflineEar, record: AudioRecord, preroll: ArrayDeque<ShortArray>) {
+        val recognizer = ear.recognizer() ?: return
+        val started = SystemClock.uptimeMillis()
+        try {
+            var final: String? = null
+            for (frame in preroll) if (recognizer.acceptWaveForm(frame, frame.size)) { final = recognizer.result; break }
+            val buffer = ShortArray(FRAME)
+            while (final == null && guard === Thread.currentThread() && !Thread.currentThread().isInterrupted) {
+                val n = record.read(buffer, 0, FRAME)
+                if (n <= 0) continue
+                if (recognizer.acceptWaveForm(buffer, n)) final = recognizer.result
+                else if (SystemClock.uptimeMillis() - started > MAX_UTTERANCE_MS) final = recognizer.finalResult
+            }
+            val phrases = final?.let { OfflineEar.phrases(it) }.orEmpty()
+            Log.d(TAG, "офлайн почула (${SystemClock.uptimeMillis() - started} мс): $phrases")
+            if (phrases.isNotEmpty()) handler.post { if (active) onPhrase(phrases) }
+        } catch (e: Exception) {
+            Log.w(TAG, "offline recognition failed", e)
+        } finally {
+            recognizer.close()
         }
     }
 
@@ -292,6 +329,9 @@ class VoiceListener(
         private const val LEGACY_KEY = "music_volume"
         private const val RATE = 16000
         private const val FRAME = RATE / 50 // 20 мс
+        /** Запас звуку перед спрацюванням вартового: 30 кадрів по 20 мс. */
+        private const val PREROLL_FRAMES = 30
+        private const val MAX_UTTERANCE_MS = 15_000L
         /** Скільки слухати після останньої почутої мови, перш ніж повернутися до вартового. */
         private const val SESSION_MS = 8_000L
         /**

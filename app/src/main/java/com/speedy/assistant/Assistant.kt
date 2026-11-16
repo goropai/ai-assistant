@@ -55,6 +55,7 @@ class Assistant(
     private val phone: com.speedy.assistant.phone.PhoneActions? = null,
     private val currency: com.speedy.assistant.weather.Currency? = null,
     private val profiles: com.speedy.assistant.people.Profiles? = null,
+    private val reminders: com.speedy.assistant.initiative.Reminders? = null,
     private val weather: com.speedy.assistant.weather.WeatherService? = null,
     private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
@@ -166,7 +167,9 @@ class Assistant(
         face.setMood(Mood.HAPPY)
         chirps.play(Chirp.HAPPY)
         val hint = profiles?.greetingHint(name, System.currentTimeMillis())?.let { " $it" }.orEmpty()
-        say(listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random() + hint)
+        val morning = profiles?.takeMorningBriefing(name, System.currentTimeMillis()) == true
+        say((if (morning) "Доброго ранку, $name!" else listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random()) + hint)
+        if (morning) morningBriefing()
         face.setMood(Mood.LISTENING)
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
     }
@@ -366,6 +369,28 @@ class Assistant(
                 return
             }
             LocalCommand.FIND_ROBOT -> return findPlatform()
+            LocalCommand.REMIND -> {
+                val r = com.speedy.assistant.initiative.ReminderParser.parse(command, System.currentTimeMillis())
+                    ?: return say("Не зрозуміла, коли нагадати. Скажи, наприклад: «нагадай о шостій вечора» або «через двадцять хвилин».")
+                val store = reminders ?: return say("Я поки не вмію нагадувати.")
+                store.add(r.copy(forName = partner()))
+                Log.i(TAG, "нагадування ${r.at}: ${r.text}")
+                face.setMood(Mood.HAPPY)
+                return say("Добре, нагадаю ${whenText(r.at)}: ${r.text}.")
+            }
+            LocalCommand.LIST_REMINDERS -> {
+                val list = reminders?.upcoming().orEmpty()
+                face.setMood(Mood.HAPPY)
+                return say(
+                    if (list.isEmpty()) "Нагадувань немає."
+                    else list.take(5).joinToString("; ", prefix = "Нагадаю: ", postfix = ".") { "${whenText(it.at)} — ${it.text}" }
+                )
+            }
+            LocalCommand.CANCEL_REMINDERS -> {
+                val n = reminders?.clear() ?: 0
+                face.setMood(Mood.NEUTRAL)
+                return say(if (n == 0) "Нагадувань і так немає." else "Скасувала всі нагадування.")
+            }
             LocalCommand.END_CONVERSATION -> {
                 inConversation = false
                 awaitingCommandUntil = 0
@@ -550,6 +575,58 @@ class Assistant(
     private fun moveProfiles(oldNames: List<String>, newName: String) {
         val p = people ?: return
         oldNames.filter { it != newName && !p.knows(it) }.forEach { profiles?.rename(it, newName) }
+    }
+
+    /** "о 18:00", "завтра о 9:00", "через 20 хв". */
+    private fun whenText(at: Long): String {
+        val now = System.currentTimeMillis()
+        val minutes = (at - now + 30_000) / 60_000
+        if (minutes in 0..59) return "через $minutes хв"
+        val time = java.text.SimpleDateFormat("H:mm", java.util.Locale("uk", "UA")).format(java.util.Date(at))
+        val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
+        val day = java.util.Calendar.getInstance().apply { timeInMillis = at }.get(java.util.Calendar.DAY_OF_YEAR)
+        return when (day - today) {
+            0 -> "о $time"
+            1 -> "завтра о $time"
+            else -> java.text.SimpleDateFormat("d MMMM о H:mm", java.util.Locale("uk", "UA")).format(java.util.Date(at))
+        }
+    }
+
+    /** Час нагадування настав — дочекатися паузи в розмові й сказати. */
+    fun remind(r: com.speedy.assistant.initiative.Reminder, late: Boolean = false) {
+        scope.launch {
+            while (busy) delay(500)
+            runBusy {
+                face.setMood(Mood.SURPRISED)
+                chirps.play(Chirp.ATTENTION)
+                val who = r.forName?.let { "$it, " }.orEmpty()
+                val lateText = if (late) " Я мала нагадати ${java.text.SimpleDateFormat("H:mm", java.util.Locale("uk", "UA")).format(java.util.Date(r.at))}." else ""
+                say("${who}нагадую: ${r.text}.$lateText")
+            }
+        }
+    }
+
+    /** Ранковий підсумок без моделі: погода тут, календар і нагадування на сьогодні. */
+    private suspend fun morningBriefing() {
+        val parts = mutableListOf<String>()
+        try {
+            val here = locator?.locate()
+            if (here != null && weather != null) {
+                val f = weather.forecast(here.latitude, here.longitude)
+                parts += com.speedy.assistant.weather.WeatherText.answer(f, com.speedy.assistant.weather.WeatherQuery(false, null), null)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "briefing weather: ${e.message}")
+        }
+        phone?.todayEvents()?.takeIf { it.isNotEmpty() }?.let { parts += "У календарі: ${it.joinToString("; ")}." }
+        val endOfDay = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 23); set(java.util.Calendar.MINUTE, 59)
+        }.timeInMillis
+        reminders?.upcoming()?.filter { it.at <= endOfDay }?.takeIf { it.isNotEmpty() }
+            ?.let { list -> parts += "Нагадування: ${list.joinToString("; ") { "${whenText(it.at)} — ${it.text}" }}." }
+        if (parts.isEmpty()) return
+        face.setMood(Mood.HAPPY)
+        say(parts.joinToString(" "))
     }
 
     /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */

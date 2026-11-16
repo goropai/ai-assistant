@@ -119,6 +119,9 @@ dependencies {
     // Локальне розпізнавання присутності (EfficientDet-Lite0 у assets).
     // Лише Interpreter: нативна бібліотека Task Library не завантажується на Android 7.1.
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    // Офлайн-розпізнавання мовлення (модель завантажується окремо, див. OfflineEar). JNA — як AAR для Android.
+    implementation("com.alphacephei:vosk-android:0.3.75") { exclude(group = "net.java.dev.jna") }
+    implementation("net.java.dev.jna:jna:5.18.1@aar")
     // Пошук облич у кадрі (модель вбудована в APK, працює офлайн); відбитки — MobileFaceNet у assets.
     implementation("com.google.mlkit:face-detection:16.1.7")
 
