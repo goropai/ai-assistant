@@ -23,6 +23,10 @@ class FaceIdTracker(
         private set
     private var strangerSeenAt = Long.MIN_VALUE / 2
 
+    /** Хто з облич останнього кадру — хто (для ознак обличчя в профілі). */
+    var lastMatches: List<Pair<String, FaceObservation>> = emptyList()
+        private set
+
     /** Відбитки облич з останніх кадрів (найбільше обличчя) — для виправлення імені. */
     private val recentFaces = ArrayDeque<Pair<Long, FloatArray>>()
 
@@ -37,9 +41,10 @@ class FaceIdTracker(
         val events = mutableListOf<PresenceEvent>()
         val seenNames = mutableSetOf<String>()
         var stranger: FaceObservation? = null
+        lastMatches = mutableListOf()
         for (face in faces) {
             val name = book.match(face.embedding)?.first
-            if (name != null) seenNames += name
+            if (name != null) { seenNames += name; (lastMatches as MutableList) += name to face }
             else if (face.area >= strangerMinArea && stranger == null) stranger = face
         }
 

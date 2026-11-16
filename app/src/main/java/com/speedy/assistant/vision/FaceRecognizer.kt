@@ -7,6 +7,7 @@ import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+import com.google.mlkit.vision.face.FaceLandmark
 import org.tensorflow.lite.Interpreter
 import java.io.Closeable
 import java.io.FileInputStream
@@ -15,8 +16,11 @@ import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import kotlin.math.max
 
-/** Обличчя в кадрі: відбиток і частка кадру, яку воно займає. */
-class FaceObservation(val embedding: FloatArray, val area: Float)
+/**
+ * Обличчя в кадрі: відбиток, частка кадру і [eyeLevel] — де очі по висоті рамки обличчя (0 — верх,
+ * 1 — низ). У дітей очі нижче (більший лоб) — це ознака віку; null — очей не видно.
+ */
+class FaceObservation(val embedding: FloatArray, val area: Float, val eyeLevel: Float? = null)
 
 /**
  * Офлайн-розпізнавання облич: ML Kit знаходить обличчя (модель вбудована в APK),
@@ -27,6 +31,7 @@ class FaceRecognizer(context: Context) : Closeable {
     private val detector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL) // очі — для оцінки віку
             .setMinFaceSize(MIN_FACE)
             .build()
     )
@@ -59,7 +64,11 @@ class FaceRecognizer(context: Context) : Closeable {
             val crop = align(frame, box.exactCenterX(), box.exactCenterY(), max(box.width(), box.height()) * 1.15f, face.headEulerAngleZ)
                 ?: return@mapNotNull null
             val area = box.width().toFloat() * box.height() / (frame.width * frame.height)
-            FaceObservation(embed(crop), area)
+            val eyes = listOfNotNull(face.getLandmark(FaceLandmark.LEFT_EYE), face.getLandmark(FaceLandmark.RIGHT_EYE))
+            val eyeLevel = if (eyes.size == 2 && box.height() > 0) {
+                (eyes.map { it.position.y }.average().toFloat() - box.top) / box.height()
+            } else null
+            FaceObservation(embed(crop), area, eyeLevel)
         }
     }
 

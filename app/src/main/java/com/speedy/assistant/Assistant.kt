@@ -366,7 +366,8 @@ class Assistant(
     }
 
     private suspend fun handle(command: String) {
-        when (LocalCommands.match(command)) {
+        val cmd = LocalCommands.match(command)
+        when (cmd) {
             LocalCommand.STOP -> {
                 robot.stop()
                 face.setMood(Mood.NEUTRAL)
@@ -375,6 +376,19 @@ class Assistant(
             }
             LocalCommand.FIND_ROBOT -> return findPlatform()
             LocalCommand.ENGLISH_LESSON -> return englishLesson()
+            LocalCommand.ENGLISH_PLACEMENT -> {
+                english?.progress?.resetLevel(partner() ?: "гість")
+                return englishLesson()
+            }
+            LocalCommand.AGE_CHILD, LocalCommand.AGE_ADULT -> {
+                val name = partner() ?: return say("Подивись на мене, щоб я знала, про кого це.")
+                val child = cmd == LocalCommand.AGE_CHILD
+                profiles?.setAge(name, if (child) com.speedy.assistant.people.Profiles.Age.CHILD else com.speedy.assistant.people.Profiles.Age.ADULT)
+                if (child) english?.progress?.learner(name)?.level?.takeIf { it != com.speedy.assistant.english.Level.KIDS }
+                    ?.let { english.progress.setLevel(name, com.speedy.assistant.english.Level.KIDS) }
+                face.setMood(Mood.HAPPY)
+                return say(if (child) "Зрозуміла, $name ще маленький — уроки будуть дитячі." else "Зрозуміла, $name дорослий.")
+            }
             LocalCommand.ENGLISH_PROGRESS -> {
                 val name = partner() ?: "гість"
                 return say(english?.describe(name) ?: "Я поки не вмію вчити англійської.")
@@ -666,9 +680,15 @@ class Assistant(
             override suspend fun cheer() { face.setMood(Mood.HAPPY); chirps.play(Chirp.HAPPY) }
             override suspend fun oops() { face.setMood(Mood.THINKING) }
         }
+        val child = when (profiles?.age(name)) {
+            com.speedy.assistant.people.Profiles.Age.CHILD -> true
+            com.speedy.assistant.people.Profiles.Age.ADULT -> false
+            else -> null
+        }
+        Log.i(TAG, "вік $name за обличчям: ${profiles?.age(name)} (очі ${profiles?.eyeLevel(name)})")
         com.speedy.assistant.english.EnglishLesson(
             course.vocabulary, course.curriculum, course.progress, io, name,
-            now = { System.currentTimeMillis() }, extra = course.store, generate = course.generate,
+            now = { System.currentTimeMillis() }, extra = course.store, generate = course.generate, child = child,
         ).run()
         face.setMood(Mood.HAPPY)
     }

@@ -29,7 +29,14 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         var previousVisitEnd: Long = 0,
         /** День останнього ранкового підсумку. */
         var briefedDay: Int = 0,
+        /** Сума й кількість замірів положення очей (оцінка віку за обличчям). */
+        var eyeSum: Float = 0f,
+        var eyeCount: Int = 0,
+        /** Сказали вголос: "це дитина" / "це дорослий" — важливіше за оцінку. */
+        var ageOverride: String? = null,
     )
+
+    enum class Age { CHILD, ADULT, UNKNOWN }
 
     private val people = LinkedHashMap<String, Profile>()
 
@@ -114,6 +121,39 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         return null
     }
 
+    /** Замір положення очей (див. FaceObservation.eyeLevel); зберігаємо не частіше разу на хвилину. */
+    @Synchronized
+    fun faceSample(name: String, eyeLevel: Float, now: Long) {
+        val p = people.getOrPut(name) { Profile(firstSeen = now) }
+        if (p.eyeCount >= MAX_EYE_SAMPLES) return
+        p.eyeSum += eyeLevel
+        p.eyeCount++
+        save()
+    }
+
+    /** Дитина чи дорослий: спершу сказане вголос, інакше — за обличчям (від 5 замірів). */
+    @Synchronized
+    fun age(name: String): Age {
+        val p = people[name] ?: return Age.UNKNOWN
+        p.ageOverride?.let { return Age.valueOf(it) }
+        if (p.eyeCount < 5) return Age.UNKNOWN
+        val avg = p.eyeSum / p.eyeCount
+        return when {
+            avg >= CHILD_EYE_LEVEL -> Age.CHILD
+            avg <= ADULT_EYE_LEVEL -> Age.ADULT
+            else -> Age.UNKNOWN
+        }
+    }
+
+    @Synchronized
+    fun eyeLevel(name: String): Float? = people[name]?.takeIf { it.eyeCount > 0 }?.let { it.eyeSum / it.eyeCount }
+
+    @Synchronized
+    fun setAge(name: String, age: Age) {
+        people.getOrPut(name) { Profile() }.ageOverride = age.name
+        save()
+    }
+
     /** Чи пора ранкового підсумку (5:00–12:00, раз на день); якщо так — позначаємо. */
     @Synchronized
     fun takeMorningBriefing(name: String, now: Long): Boolean {
@@ -179,6 +219,9 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     previousClothing = o.optString("previousClothing").ifBlank { null },
                     previousVisitEnd = o.optLong("previousVisitEnd"),
                     briefedDay = o.optInt("briefedDay"),
+                    eyeSum = o.optDouble("eyeSum", 0.0).toFloat(),
+                    eyeCount = o.optInt("eyeCount"),
+                    ageOverride = o.optString("age").ifBlank { null },
                 )
             }
         } catch (e: Exception) {
@@ -202,6 +245,9 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     .put("previousClothing", p.previousClothing.orEmpty())
                     .put("previousVisitEnd", p.previousVisitEnd)
                     .put("briefedDay", p.briefedDay)
+                    .put("eyeSum", p.eyeSum.toDouble())
+                    .put("eyeCount", p.eyeCount)
+                    .put("age", p.ageOverride.orEmpty())
             )
         }
         f.writeText(json.toString())
@@ -212,6 +258,14 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
         const val DAY_MS = 24 * 3600_000L
         const val MAX_FACTS = 30
         const val MAX_FACT = 140
+        const val MAX_EYE_SAMPLES = 200
+        /**
+         * Положення очей у рамці ML Kit (0 — верх, 1 — низ). Дорослий на камері Спіді: 0.406–0.430
+         * (середнє 0.417, заміряно 16.11.2026); у дітей очі нижче (більший лоб) — поріг наближений.
+         * Між порогами — "невідомо" (вирішує перевірка рівня); надійніше — "це дитина" вголос.
+         */
+        const val ADULT_EYE_LEVEL = 0.44f
+        const val CHILD_EYE_LEVEL = 0.47f
 
         /** "любить каву" і "не любить каву" — про одне; новий факт замінює старий. */
         fun topicOf(fact: String): String? {

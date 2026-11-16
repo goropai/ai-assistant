@@ -26,20 +26,25 @@ class EnglishTest {
     private val curriculum = Curriculum.parse(File("src/main/assets/english/lessons.json").readText())
 
     /** Учень: повторює фрази, відповідає на питання зразком, знає слова (або каже "не знаю"). */
-    private inner class FakeStudent(val good: Boolean, val levelAnswer: String = "середній", val confidence: Float = 0.9f) : LessonIO {
+    /** [knowsUpTo] — найвищий рівень слів, які учень знає на перевірці рівня. */
+    private inner class FakeStudent(
+        val good: Boolean,
+        val knowsUpTo: Level = Level.B1,
+        val confidence: Float = 0.9f,
+    ) : LessonIO {
         val said = mutableListOf<String>()
         private var lastEnglish = ""
         private var lastUk = ""
         override suspend fun say(uk: String) { said += uk; lastUk = uk }
         override suspend fun sayEnglish(en: String) { said += "EN:$en"; lastEnglish = en; lastUk = "" }
         override suspend fun listen(english: Boolean): Heard? {
-            if (lastUk.contains("рівень")) return Heard(listOf(levelAnswer))
             if (!good) return Heard(listOf("не знаю"))
             if (!english) return Heard(listOf(vocab.find(lastEnglish)?.uk?.first() ?: ""))
             // Питання діалогу — відповідаємо зразком; "Як англійською «X»?" — слово; інакше повторюємо почуте.
             val question = Level.entries.flatMap { curriculum.units(it) }.flatMap { it.dialogue }.firstOrNull { it.q == lastEnglish }
             val uk = Regex("«(.+)»").find(lastUk)?.groupValues?.get(1)
             val word = uk?.let { u -> Level.entries.flatMap { vocab.words(it) }.firstOrNull { u in it.uk } }
+            if (word != null && word.level.ordinal > knowsUpTo.ordinal) return Heard(listOf("не знаю"))
             val text = question?.sample ?: word?.en ?: lastEnglish
             return Heard(listOf(text), confidence)
         }
@@ -47,8 +52,8 @@ class EnglishTest {
         override suspend fun oops() {}
     }
 
-    private fun lesson(student: FakeStudent, progress: EnglishProgress, name: String, at: Long = 0L) =
-        EnglishLesson(vocab, curriculum, progress, student, name, now = { at })
+    private fun lesson(student: FakeStudent, progress: EnglishProgress, name: String, at: Long = 0L, child: Boolean? = null) =
+        EnglishLesson(vocab, curriculum, progress, student, name, now = { at }, child = child)
 
     @Test
     fun contentLoaded() {
@@ -97,10 +102,10 @@ class EnglishTest {
     fun goodStudentPassesUnitAndProgressPersists() = runBlocking {
         val file = File(tmp.root, "english.json")
         val progress = EnglishProgress(file)
-        val student = FakeStudent(good = true)
-        lesson(student, progress, "Тарас").run()
+        val student = FakeStudent(good = true, knowsUpTo = Level.A2)
+        lesson(student, progress, "Тарас", child = false).run()
         val loaded = EnglishProgress(file)
-        assertEquals(Level.A2, loaded.learner("Тарас").level)
+        assertEquals(Level.A2, loaded.learner("Тарас").level) // перевірка: знає до A2 включно
         assertEquals(1, loaded.unitIndex("Тарас", Level.A2)) // перша тема зарахована
         val l = loaded.learner("Тарас").lessons.single()
         assertEquals(l.total, l.score)
@@ -114,6 +119,18 @@ class EnglishTest {
     }
 
     @Test
+    fun placementTest() = runBlocking {
+        val p = EnglishProgress(null)
+        lesson(FakeStudent(good = true, knowsUpTo = Level.A1), p, "Ніна", child = false).run()
+        assertEquals(Level.A1, p.learner("Ніна").level)
+        lesson(FakeStudent(good = true), p, "Тарас", child = false).run()
+        assertEquals(Level.B1, p.learner("Тарас").level)
+        // Вік невідомий і не знає навіть дитячих слів — дитячий рівень.
+        lesson(FakeStudent(good = false), p, "Гість", child = null).run()
+        assertEquals(Level.KIDS, p.learner("Гість").level)
+    }
+
+    @Test
     fun weakStudentRepeatsUnit() = runBlocking {
         val progress = EnglishProgress(null).apply { setLevel("Ніна", Level.A1) }
         lesson(FakeStudent(good = false), progress, "Ніна").run()
@@ -123,8 +140,9 @@ class EnglishTest {
     @Test
     fun childGetsKidsTopicAndOwnProgress() = runBlocking {
         val progress = EnglishProgress(null)
-        val kid = FakeStudent(good = true, levelAnswer = "малюк")
-        lesson(kid, progress, "Даринка").run()
+        // Дитина за обличчям — дитячі уроки, навіть якщо слова складніших рівнів "знає".
+        val kid = FakeStudent(good = true)
+        lesson(kid, progress, "Даринка", child = true).run()
         assertEquals(Level.KIDS, progress.learner("Даринка").level)
         assertTrue(kid.said.contains("Урок 1: Привітання."))
         assertNull(progress.learner("Тарас").level)

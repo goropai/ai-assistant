@@ -46,6 +46,7 @@ class PresenceWatcher(
     private var facesBroken = false
     private var lastRun = 0L
     private var lastKinds = emptySet<Kind>()
+    private var lastEyeSample = Long.MIN_VALUE / 2
     private val lastProfileUpdate = HashMap<String, Long>()
     private var clothingCandidate: Pair<String, Int>? = null
     /** Прив'язка камери асинхронна: між start() і готовністю провайдера могли викликати stop(). */
@@ -154,6 +155,15 @@ class PresenceWatcher(
                         emptyList()
                     }
                     events += people.update(now, observed)
+                    if (profiles != null && now - lastEyeSample >= 60_000) {
+                        people.lastMatches().forEach { (name, face) ->
+                            face.eyeLevel?.let { level ->
+                                Log.d(TAG, "очі $name: %.3f".format(level))
+                                profiles.faceSample(name, level, System.currentTimeMillis())
+                                lastEyeSample = now
+                            }
+                        }
+                    }
                 }
             }
             val names = people?.presentNames(now).orEmpty()

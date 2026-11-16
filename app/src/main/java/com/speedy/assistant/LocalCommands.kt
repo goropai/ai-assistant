@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, ENGLISH_PLACEMENT, AGE_CHILD, AGE_ADULT, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -101,6 +101,9 @@ object LocalCommands {
 
     private val englishLesson = Regex("(?:урок|заняття)\\s+англійськ|(?:вчити|вчимо|повчимо|позаймаємося|займемося|потренуємо|потренуймо)\\s+англійськ|англійськ\\p{L}*\\s+(?:урок|заняття)")
     private val englishProgress = Regex("(?:прогрес|успіхи)\\s+(?:в|з|у)\\s+англійськ|як\\s+(?:в\\s+мене|у\\s+мене|я)\\s+(?:з|в|у)\\s+англійськ")
+    private val englishPlacement = Regex("(?:перевір|визнач|протестуй)\\p{L}*\\s+(?:мій\\s+)?рівень\\s+(?:з\\s+)?англійськ")
+    private val ageChild = Regex("^(?:це|я|він|вона)\\s+(?:ще\\s+)?(?:дитина|малюк|маленьк\\p{L}*)$")
+    private val ageAdult = Regex("^(?:це|я|він|вона)\\s+(?:вже\\s+)?(?:дорослий|доросла|дорослі)$")
     private val englishLevel = Regex("рівень\\s+(?:з\\s+)?англійськ")
 
     private val remind = Regex("^нагадай\\s")
@@ -127,6 +130,9 @@ object LocalCommands {
     fun match(command: String): LocalCommand? {
         val text = normalize(command)
         return when {
+            englishPlacement.containsMatchIn(text) -> LocalCommand.ENGLISH_PLACEMENT
+            ageChild.matches(text) -> LocalCommand.AGE_CHILD
+            ageAdult.matches(text) -> LocalCommand.AGE_ADULT
             englishLevel.containsMatchIn(text) && com.speedy.assistant.english.Level.fromSpoken(text.substringAfter("англійськ")) != null -> LocalCommand.ENGLISH_LEVEL
             englishProgress.containsMatchIn(text) -> LocalCommand.ENGLISH_PROGRESS
             englishLesson.containsMatchIn(text) -> LocalCommand.ENGLISH_LESSON

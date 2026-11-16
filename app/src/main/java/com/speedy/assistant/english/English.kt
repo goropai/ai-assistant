@@ -79,6 +79,13 @@ class EnglishProgress(private val file: File?) {
     @Synchronized
     fun learner(name: String): Learner = learners.getOrPut(name) { Learner() }
 
+    /** Скинути рівень — наступний урок почнеться з перевірки. */
+    @Synchronized
+    fun resetLevel(name: String) {
+        learner(name).level = null
+        save()
+    }
+
     @Synchronized
     fun setLevel(name: String, level: Level) {
         learner(name).level = level

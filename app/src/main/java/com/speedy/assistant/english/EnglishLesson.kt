@@ -27,6 +27,8 @@ class EnglishLesson(
     private val extra: UnitStore? = null,
     /** Скласти нову тему моделлю (null — не вдалось / немає "мозку"). */
     private val generate: (suspend (Level, List<String>) -> Pair<org.json.JSONObject, Unit>?)? = null,
+    /** Дитина за обличчям чи словами (true), дорослий (false), невідомо (null). */
+    private val child: Boolean? = null,
 ) {
     private var stopped = false
     private var silences = 0
@@ -35,7 +37,7 @@ class EnglishLesson(
     private val pronunciation = mutableListOf<Int>()
 
     suspend fun run() {
-        val level = progress.learner(name).level ?: askLevel()
+        val level = progress.learner(name).level ?: placement()
         val kids = level == Level.KIDS
         val units = curriculum.units(level) + extra?.units(level).orEmpty()
         val index = progress.unitIndex(name, level)
@@ -62,20 +64,37 @@ class EnglishLesson(
         return unit
     }
 
-    private suspend fun askLevel(): Level {
-        io.say("Який у тебе рівень англійської: малюк, початківець, середній чи впевнений?")
-        repeat(2) {
-            val level = io.listen(english = false)?.texts?.firstNotNullOfOrNull { Level.fromSpoken(it) }
-            if (level != null) {
-                progress.setLevel(name, level)
-                io.say("Добре, рівень — ${level.ua}.")
-                return level
-            }
-            if (it == 0) io.say("Не зрозуміла. Скажи одне слово: малюк, початківець, середній чи впевнений.")
+    /**
+     * Швидка перевірка рівня замість питання: слова від простих до складних, по 2 на рівень,
+     * до першої помилки. Дитина (за обличчям) — одразу дитячі уроки: 4-річна дитина в Україні
+     * англійську на високому рівні не знає. Дорослого починаємо з "початківця".
+     */
+    private suspend fun placement(): Level {
+        if (child == true) {
+            io.say("Бачу, що ти ще маленький! Почнемо з дитячих уроків.")
+            progress.setLevel(name, Level.KIDS)
+            return Level.KIDS
         }
-        progress.setLevel(name, Level.A1)
-        io.say("Почнемо з рівня «початківець», а далі побачимо.")
-        return Level.A1
+        io.say("Спершу швидко перевіримо, що ти вже знаєш. Я казатиму слова, а ти — англійською.")
+        val start = if (child == false) Level.A1 else Level.KIDS
+        var passed: Level? = null
+        for (level in Level.entries.filter { it.ordinal >= start.ordinal }) {
+            var correct = 0
+            for (word in vocabulary.words(level).shuffled().take(2)) {
+                io.say("«${word.uk.first()}»?")
+                val heard = io.listen(english = true)
+                if (control(heard)) break
+                if (heard != null && Answers.matches(heard.texts, listOf(word.en))) correct++
+            }
+            if (stopped || correct < 2) break
+            passed = level
+        }
+        stopped = false // перервали перевірку — урок однаково на визначеному рівні
+        silences = 0
+        val level = passed ?: start
+        progress.setLevel(name, level)
+        io.say("Твій рівень — ${level.ua}.")
+        return level
     }
 
     /** Українською з англійськими вставками {…} — кожну частину своїм голосом. */

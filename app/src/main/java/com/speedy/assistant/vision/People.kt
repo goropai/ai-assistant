@@ -11,6 +11,10 @@ class People(private val book: FaceBook) {
     @Synchronized
     fun update(now: Long, faces: List<FaceObservation>): List<PresenceEvent> = tracker.update(now, faces)
 
+    /** Знайомі обличчя з останнього кадру. */
+    @Synchronized
+    fun lastMatches(): List<Pair<String, FaceObservation>> = tracker.lastMatches
+
     @Synchronized
     fun presentNames(now: Long): List<String> = tracker.presentNames(now)
 
