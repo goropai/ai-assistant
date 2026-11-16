@@ -137,6 +137,22 @@ class BooksTest {
     }
 
     @Test
+    fun knownBooksFoundWithoutScanning() {
+        val json = File(tmp.root, "books.json")
+        val stone = tmp.newFile("hp1.epub")
+        val chamber = tmp.newFile("Harry_Potter_i_taiemna_kimnata.epub")
+        var scanned = false
+        val shelf = Bookshelf({ scanned = true; listOf(tmp.root) }, json)
+        shelf.save(stone, null, Place(2, 5, 17, "Гаррі Поттер і філософський камінь"))
+        // Назва з метаданих книги (ім'я файлу "hp1" нічого не каже) — і без обходу сховища.
+        assertEquals(stone, shelf.find("гаррі поттер і філософський камінь"))
+        assertTrue(!scanned)
+        // Інша частина: прочитана підходить лише частково — шукаємо по сховищу.
+        assertEquals(chamber, shelf.find("гаррі поттер і таємна кімната"))
+        assertTrue(scanned)
+    }
+
+    @Test
     fun progressSurvivesRestart() {
         val json = File(tmp.root, "books.json")
         val book = tmp.newFile("kobzar.fb2")

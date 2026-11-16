@@ -65,7 +65,17 @@ class Bookshelf(
     }
 
     /** Книга за сказаною назвою (українською чи латиницею в імені файлу); null — нічого схожого. */
-    fun find(query: String): File? = best(query, all())
+    fun find(query: String): File? = findKnown(query) ?: best(query, all())
+
+    /**
+     * Серед книг, які вже читали (books.json) — без обходу сховища. Назва тут — і з самої книги
+     * (метадані EPUB/FB2/PDF), і з імені файлу. Лише повний збіг: "Гаррі Поттер і таємна кімната"
+     * не має знайти вже прочитаний "…і філософський камінь" — тоді шукаємо по всьому сховищу.
+     */
+    fun findKnown(query: String): File? {
+        val known = synchronized(this) { places.keys.toList() }.map(::File).filter { it.exists() }
+        return best(query, known, minScore = 1.0) { "${title(it)} ${Books.titleFromName(it)}" }
+    }
 
     @Synchronized
     fun place(file: File): Place? = places[file.path]
@@ -114,11 +124,12 @@ class Bookshelf(
         private val SKIP = setOf("cache", ".thumbnails", "thumbnails", "log", "logs", "lost.dir", "dcim")
 
         /** Найкраще збігання назви: частка слів запиту, знайдених у назві файлу (з транслітерацією). */
-        fun best(query: String, files: List<File>): File? {
-            val q = words(query).filter { it !in FILLER }
+        fun best(query: String, files: List<File>, minScore: Double = 0.5, titleOf: (File) -> String = Books::titleFromName): File? {
+            // "і", "в", "з" — не зіставляємо (similar вимагає ≥ 2 літер), цифри — так.
+            val q = words(query).filter { it !in FILLER && (it.length >= 2 || it.toIntOrNull() != null) }
             if (q.isEmpty()) return null
-            return files.map { it to score(q, words(Books.titleFromName(it) + " " + (it.parentFile?.name ?: ""))) }
-                .filter { it.second >= 0.5 }
+            return files.map { it to score(q, words(titleOf(it) + " " + (it.parentFile?.name ?: ""))) }
+                .filter { it.second >= minScore }
                 .maxWithOrNull(compareBy<Pair<File, Double>> { it.second }.thenBy { it.first.lastModified() })
                 ?.first
         }
