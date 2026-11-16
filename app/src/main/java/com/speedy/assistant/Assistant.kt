@@ -253,7 +253,8 @@ class Assistant(
                 face.setSpeaking(false)
                 busy = false
                 onBusyChanged(false)
-                ears.start()
+                // Спитала й чекає відповіді — слухаємо одразу, щоб не обрізати початок фрази.
+                ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
                 scheduleIdle()
             }
         }
