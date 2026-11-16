@@ -50,8 +50,12 @@ class CommandsTest {
     @Test
     fun otherCommands() {
         assertEquals(LocalCommand.STOP, LocalCommands.match("Стоп!"))
-        listOf("розкажи жарт", "оновлення погоди на завтра", "онови мені пам'ять про погоду").forEach {
+        listOf("розкажи жарт").forEach {
             assertNull(it, LocalCommands.match(it))
+        }
+        // Слово "оновлення" не має запускати оновлення застосунку — це питання про погоду.
+        listOf("оновлення погоди на завтра", "онови мені пам'ять про погоду").forEach {
+            assertEquals(it, LocalCommand.WEATHER, LocalCommands.match(it))
         }
     }
 }

@@ -69,6 +69,13 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    private val llm by lazy { ConfiguredLlm(http, settings) }
+
+    /** Індикатор зв'язку з "мозком": перевірка без токенів (список моделей). */
+    private fun checkBrain() {
+        lifecycleScope.launch { face.setBrainStatus(llm.status()) }
+    }
+
     private val http by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
@@ -97,7 +104,11 @@ class MainActivity : AppCompatActivity() {
         face.setOnLongClickListener { openSettings(); true }
         setContentView(face)
 
-        val needed = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        val needed = arrayOf(
+            Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA,
+            // Не обов'язковий: без нього погода лише за назвою міста.
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        )
         if (needed.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             initAssistant()
         } else {
@@ -116,7 +127,7 @@ class MainActivity : AppCompatActivity() {
             scope = lifecycleScope,
             face = face,
             voice = voice,
-            brain = Brain(ConfiguredLlm(http, settings), presence = { presence?.summary.orEmpty() }),
+            brain = Brain(llm, presence = { presence?.summary.orEmpty() }),
             camera = CameraSnapshot(this, this),
             robot = robot,
             findRobot = { robot.rediscover() },
@@ -124,6 +135,8 @@ class MainActivity : AppCompatActivity() {
             chirps = ChirpPlayer(),
             battery = { batteryPercent to charging },
             people = people,
+            weather = com.speedy.assistant.weather.WeatherService(http),
+            locator = com.speedy.assistant.location.Locator(this),
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }).also {
                     if (!it.isAvailable()) toast("Розпізнавання мовлення недоступне — потрібен застосунок Google")
@@ -143,6 +156,12 @@ class MainActivity : AppCompatActivity() {
         connectivity.registerDefaultNetworkCallback(networkCallback)
         lifecycleScope.launch {
             while (isActive) {
+                face.setBrainStatus(llm.status())
+                delay(10 * 60_000)
+            }
+        }
+        lifecycleScope.launch {
+            while (isActive) {
                 delay(60_000)
                 val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
                 val near = presence?.summary.orEmpty().isNotBlank()
@@ -160,6 +179,7 @@ class MainActivity : AppCompatActivity() {
     private fun openSettings() {
         SettingsDialog.show(this, settings) {
             face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
+            checkBrain()
             updatePresence()
         }
     }
@@ -217,6 +237,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread {
                 if (connectivity.activeNetwork != null || networkLost) return@runOnUiThread
                 networkLost = true
+                face.setBrainStatus(com.speedy.assistant.brain.BrainStatus.DOWN)
                 assistant?.chirp(Chirp.NO_NETWORK, Mood.SAD)
             }
         }
@@ -226,6 +247,7 @@ class MainActivity : AppCompatActivity() {
                 if (!networkLost) return@runOnUiThread
                 networkLost = false
                 assistant?.chirp(Chirp.HAPPY, Mood.HAPPY)
+                checkBrain()
             }
         }
     }

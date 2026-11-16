@@ -27,6 +27,8 @@ class FaceView @JvmOverloads constructor(
 
     private val eyePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val lidPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+    private val statusPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var brainStatus = com.speedy.assistant.brain.BrainStatus.UNKNOWN
     private val eyeRect = RectF()
     private val lidRect = RectF()
 
@@ -71,6 +73,13 @@ class FaceView @JvmOverloads constructor(
     fun lookAt(x: Float, y: Float) {
         lookUntil = SystemClock.uptimeMillis() + LOOK_HOLD_MS
         animateTo(EyeShape.of(mood).withGaze(x.coerceIn(-1f, 1f) * 0.6f, y.coerceIn(-1f, 1f) * 0.4f))
+    }
+
+    /** Тьмяна крапка внизу: зелена — "мозок" на зв'язку, червона — ні, жовта — немає ключа. */
+    fun setBrainStatus(status: com.speedy.assistant.brain.BrainStatus) {
+        if (status == brainStatus) return
+        brainStatus = status
+        invalidate()
     }
 
     fun blink() {
@@ -162,8 +171,20 @@ class FaceView @JvmOverloads constructor(
 
         drawEye(canvas, left = true, s = shape, blink = blink, bob = bob)
         drawEye(canvas, left = false, s = shape, blink = blink, bob = bob)
+        drawBrainStatus(canvas)
 
         if (animating) postInvalidateOnAnimation()
+    }
+
+    private fun drawBrainStatus(canvas: Canvas) {
+        statusPaint.color = when (brainStatus) {
+            com.speedy.assistant.brain.BrainStatus.OK -> 0xFF1F7A3A.toInt()
+            com.speedy.assistant.brain.BrainStatus.DOWN -> 0xFF8A2020.toInt()
+            com.speedy.assistant.brain.BrainStatus.NO_KEY -> 0xFF8A6A10.toInt()
+            com.speedy.assistant.brain.BrainStatus.UNKNOWN -> return
+        }
+        val r = resources.displayMetrics.density * 4
+        canvas.drawCircle(width / 2f, height - r * 4, r, statusPaint)
     }
 
     private fun drawEye(canvas: Canvas, left: Boolean, s: EyeShape, blink: Float, bob: Float) {

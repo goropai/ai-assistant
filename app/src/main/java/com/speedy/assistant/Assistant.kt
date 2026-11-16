@@ -46,6 +46,8 @@ class Assistant(
     /** Заряд у відсотках (-1 — невідомо) і чи заряджається. */
     private val battery: () -> Pair<Int, Boolean> = { -1 to false },
     private val people: People? = null,
+    private val weather: com.speedy.assistant.weather.WeatherService? = null,
+    private val locator: com.speedy.assistant.location.Locator? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -298,6 +300,8 @@ class Assistant(
                 }
                 return askName()
             }
+            LocalCommand.WEATHER -> return tellWeather(command)
+            LocalCommand.WHERE -> return tellWhere()
             LocalCommand.TIME -> {
                 face.setMood(Mood.HAPPY)
                 return say("Зараз ${java.text.SimpleDateFormat("H:mm", java.util.Locale("uk", "UA")).format(java.util.Date())}.")
@@ -312,7 +316,7 @@ class Assistant(
         }
 
         face.setMood(Mood.THINKING)
-        var reply = brain.ask(command)
+        var reply = askBrain { brain.ask(command) }
         var looks = 0
         var steps = 0
 
@@ -325,7 +329,7 @@ class Assistant(
                     if (reply.say.isNotBlank()) speak(reply)
                     face.setMood(Mood.THINKING)
                     val jpeg = photo(action.camera) ?: return
-                    reply = brain.ask(Brain.cameraFollowUp(action.camera), jpeg)
+                    reply = askBrain { brain.ask(Brain.cameraFollowUp(action.camera), jpeg) }
                 }
                 "move" -> {
                     val direction = Direction.parse(action.direction) ?: return speak(reply)
@@ -359,7 +363,7 @@ class Assistant(
                         status?.last == "obstacle" -> "зупинилась раніше перед перешкодою"
                         else -> "виконано"
                     }
-                    reply = brain.ask(Brain.navFollowUp(action.direction, ms, outcome, status?.distanceCm, steps), jpeg)
+                    reply = askBrain { brain.ask(Brain.navFollowUp(action.direction, ms, outcome, status?.distanceCm, steps), jpeg) }
                 }
                 "stop" -> {
                     robot.stop()
@@ -368,6 +372,52 @@ class Assistant(
                 else -> return speak(reply)
             }
         }
+    }
+
+    /** Погода без моделі: місто з фрази або там, де Спіді (GPS / мережа), прогноз — Open-Meteo. */
+    private suspend fun tellWeather(command: String) {
+        val service = weather ?: return say("Я поки не вмію дивитися погоду.")
+        val query = com.speedy.assistant.weather.WeatherText.parse(command)
+        face.setMood(Mood.THINKING)
+        try {
+            val (lat, lon, name) = if (query.place != null) {
+                val place = service.findPlace(query.place)
+                    ?: return say("Не знайшла місто ${query.place}.").also { face.setMood(Mood.SAD) }
+                Triple(place.latitude, place.longitude, place.name)
+            } else {
+                val here = locator?.locate()
+                    ?: return say("Не знаю, де я. Дозволь визначати місцезнаходження або назви місто.").also { face.setMood(Mood.SAD) }
+                Triple(here.latitude, here.longitude, null)
+            }
+            val forecast = service.forecast(lat, lon)
+            face.setMood(Mood.HAPPY)
+            say(com.speedy.assistant.weather.WeatherText.answer(forecast, query, name))
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "weather failed", e)
+            face.setMood(Mood.SAD)
+            chirps.play(Chirp.NO_NETWORK)
+            say("Не вдалося дізнатися погоду. Перевір інтернет.")
+        }
+    }
+
+    private suspend fun tellWhere() {
+        val loc = locator ?: return say("Я не вмію визначати місцезнаходження.")
+        face.setMood(Mood.THINKING)
+        val here = loc.locate() ?: return say("Не можу визначити, де я. Перевір, чи увімкнене місцезнаходження.").also { face.setMood(Mood.SAD) }
+        val name = loc.placeName(here)
+        face.setMood(Mood.HAPPY)
+        say(name?.let { "Ми тут: $it." } ?: "Мої координати: %.3f, %.3f.".format(here.latitude, here.longitude))
+    }
+
+    /** Запит до "мозку" з оновленням індикатора зв'язку на екрані. */
+    private suspend fun <T> askBrain(block: suspend () -> T): T = try {
+        block().also { face.setBrainStatus(com.speedy.assistant.brain.BrainStatus.OK) }
+    } catch (e: MissingKeyException) {
+        face.setBrainStatus(com.speedy.assistant.brain.BrainStatus.NO_KEY)
+        throw e
+    } catch (e: java.io.IOException) {
+        face.setBrainStatus(com.speedy.assistant.brain.BrainStatus.DOWN)
+        throw e
     }
 
     private suspend fun photo(camera: String): ByteArray? = try {

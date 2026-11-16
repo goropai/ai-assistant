@@ -84,6 +84,19 @@ class ClaudeClient(
         }
     }
 
+    override suspend fun ping(): Boolean = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url("https://api.anthropic.com/v1/models?limit=1")
+            .header("x-api-key", apiKey)
+            .header("anthropic-version", "2023-06-01")
+            .build()
+        try {
+            http.newCall(request).execute().use { it.isSuccessful }
+        } catch (e: java.io.IOException) {
+            false
+        }
+    }
+
     private fun toJson(turn: Turn): JSONObject {
         val content = JSONArray()
         // Зображення — перед текстом.

@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I }
+enum class LocalCommand { STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, WHO_AM_I, WEATHER, WHERE }
 
 object LocalCommands {
 
@@ -38,6 +38,9 @@ object LocalCommands {
     private val notNames = setOf("не", "ні", "ніяк", "нічого", "неважливо", "секрет", "відстань", "стоп", "так", "що")
 
     /** Ім'я з фрази знайомства ("мене звати Тарас") або з відповіді на "як тебе звати?" ("Тарас", "я Тарас"). */
+    // "де ми", "де я", "де ти зараз", "де ми знаходимось"
+    private val where = Regex("^де\\s+(ми|я|ти)(\\s+(зараз|знаходимо?ся|знаходишся|знаходимось))?$")
+
     fun parseName(phrase: String, answer: Boolean = false): String? {
         val text = normalize(phrase)
         val word = introduce.find(text)?.groupValues?.get(2)
@@ -65,6 +68,8 @@ object LocalCommands {
             introduce.containsMatchIn(text) -> LocalCommand.INTRODUCE
             forgetMe.containsMatchIn(text) -> LocalCommand.FORGET_ME
             whoAmI.containsMatchIn(text) -> LocalCommand.WHO_AM_I
+            where.containsMatchIn(text) -> LocalCommand.WHERE
+            com.speedy.assistant.weather.WeatherText.isWeatherQuestion(text) -> LocalCommand.WEATHER
             time.containsMatchIn(text) -> LocalCommand.TIME
             // Лише короткі питання: "постав мене на зарядку, а потім…" — уже до моделі.
             battery.containsMatchIn(text) && text.split(' ').size <= 5 -> LocalCommand.BATTERY
