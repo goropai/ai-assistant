@@ -42,7 +42,10 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         /** Висота голосу (Гц): сума й кількість замірів. */
         var voiceSum: Float = 0f,
         var voiceCount: Int = 0,
-    )
+    ) {
+        /** Скільки не було контакту перед поточною появою (для "привіт" чи "ти знову тут"); не зберігається. */
+        var returnGapMs: Long = Long.MAX_VALUE
+    }
 
     enum class Age { CHILD, ADULT, UNKNOWN }
 
@@ -57,10 +60,22 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
     @Synchronized
     fun names(): Set<String> = people.keys.toSet()
 
+    /** Скільки не було контакту перед цією появою; [Long.MAX_VALUE] — ще не бачила. */
+    @Synchronized
+    fun returnGap(name: String): Long = people[name]?.returnGapMs ?: Long.MAX_VALUE
+
+    /** Привіталась (чи відгукнулась) — до наступної перерви знову "привіт" не казати. */
+    @Synchronized
+    fun greeted(name: String) {
+        people[name]?.returnGapMs = 0
+    }
+
     /** Людина поруч. Візит рахуємо, якщо не бачила її понад [VISIT_GAP_MS]. */
     @Synchronized
     fun seen(name: String, now: Long) {
         val p = people.getOrPut(name) { Profile(firstSeen = now) }
+        // Повернулась після перерви — запам'ятати, якої (на "привіт" — лише після довгої).
+        if (now - p.lastSeen > RETURN_MS) p.returnGapMs = if (p.lastSeen == 0L) Long.MAX_VALUE else now - p.lastSeen
         if (now - p.lastSeen > VISIT_GAP_MS) {
             p.previousVisitEnd = p.lastSeen
             p.visits++
@@ -286,6 +301,8 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
 
     companion object {
         const val VISIT_GAP_MS = 30 * 60_000L
+        /** Не бачила довше — це вже "повернулась", а не та сама присутність. */
+        const val RETURN_MS = 2 * 60_000L
         const val DAY_MS = 24 * 3600_000L
         const val MAX_FACTS = 30
         const val MAX_FACT = 140

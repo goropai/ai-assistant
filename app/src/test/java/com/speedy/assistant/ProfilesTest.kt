@@ -125,4 +125,23 @@ class ProfilesTest {
         assertEquals(LocalCommand.ABOUT_ME, LocalCommands.match("що ти про мене знаєш?"))
         assertEquals(LocalCommand.ABOUT_ME, LocalCommands.match("що ти пам'ятаєш про мене"))
     }
+
+    @Test
+    fun greetOnlyAfterLongBreak() {
+        val p = Profiles(null, utc)
+        val start = at(17, 9)
+        p.seen("Тарас", start)
+        assertEquals(Long.MAX_VALUE, p.returnGap("Тарас")) // уперше — "привіт"
+        p.greeted("Тарас")
+        // Увесь час у кадрі (кадри щохвилини) — через 10 хв знову впізнала: не "привіт".
+        (1..10).forEach { p.seen("Тарас", start + it * 60_000L) }
+        assertEquals(0L, p.returnGap("Тарас"))
+        // Пішов на 20 хв і повернувся — перерва коротка (< 3 год): "ти знову тут".
+        p.seen("Тарас", start + 30 * 60_000L)
+        assertEquals(20 * 60_000L, p.returnGap("Тарас"))
+        p.greeted("Тарас")
+        // Пішов на 4 години — знову "привіт".
+        p.seen("Тарас", start + 30 * 60_000L + 4 * 3600_000L)
+        assertTrue(p.returnGap("Тарас") >= 3 * 3600_000L)
+    }
 }

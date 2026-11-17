@@ -234,9 +234,16 @@ class Assistant(
     private suspend fun greetKnown(name: String) {
         face.setMood(Mood.HAPPY)
         chirps.play(Chirp.HAPPY)
-        val hint = profiles?.greetingHint(name, System.currentTimeMillis())?.let { " $it" }.orEmpty()
         val morning = profiles?.takeMorningBriefing(name, System.currentTimeMillis()) == true
-        say((if (morning) "Доброго ранку, $name!" else listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random()) + hint)
+        // "Привіт" — лише після довгої перерви; щойно бачились — інакше, без привітання й підказок.
+        val longAway = (profiles?.returnGap(name) ?: Long.MAX_VALUE) >= GREET_AGAIN_MS
+        profiles?.greeted(name)
+        if (!morning && !longAway) {
+            say(listOf("О, $name, ти знову тут!", "З поверненням, $name!", "$name, я тебе бачу!", "А ось і $name!").random())
+        } else {
+            val hint = profiles?.greetingHint(name, System.currentTimeMillis())?.let { " $it" }.orEmpty()
+            say((if (morning) "Доброго ранку, $name!" else listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random()) + hint)
+        }
         if (morning) morningBriefing()
         if (morning) reportNight(onlyNew = true)
         face.setMood(Mood.LISTENING)
@@ -434,6 +441,8 @@ class Assistant(
         inConversation = true
         noteClaimedName(candidates)
         noteVoice()
+        // Розмова — теж контакт: "привіт" наступного разу — лише через 3 години після неї.
+        partner()?.let { profiles?.seen(it, System.currentTimeMillis()) }
         // Звук фрази — для відбитка голосу (хто говорить), якщо свіжий.
         val audio = ears.lastUtterance?.takeIf { SystemClock.uptimeMillis() - ears.lastUtteranceAt < 5_000 }
         runBusy {
@@ -1951,6 +1960,8 @@ class Assistant(
         const val MAX_LISTED = 6
         /** "Я Ліна" діє стільки після останньої такої репліки. */
         const val CLAIM_MS = 3 * 60_000L
+        /** "Привіт" знову — лише якщо не було контакту довше. */
+        const val GREET_AGAIN_MS = 3 * 3600_000L
         /** Відбиток голосу діє для фрази й відповіді на неї. */
         const val VOICE_FRESH_MS = 30_000L
         private val CLAIM = Regex("(?:^|[\\s,])я\\s+(\\p{L}[\\p{L}'’-]+)")
