@@ -16,6 +16,11 @@ class CommandsTest {
         assertNull(WakeWord.extractCommand(listOf("спідометр показує сто")))
         // Будь-де у фразі — звертання (і без коми).
         assertEquals("що там", WakeWord.extractCommand(listOf("що там спіді")))
+        // "Оновись, Спіді" = "Спіді, оновись" (з комою й без — як пише розпізнавач).
+        listOf("Оновись, Спіді", "оновись спіді", "Оновись Спіди", "Спіді, оновись").forEach {
+            assertEquals(it, "оновись", WakeWord.extractCommand(listOf(it))?.lowercase())
+            assertEquals(it, LocalCommand.INSTALL_UPDATE, LocalCommands.match(WakeWord.extractCommand(listOf(it))!!))
+        }
         assertEquals("так, що ти бачиш", WakeWord.extractCommand(listOf("так, Спіді, що ти бачиш")))
         assertEquals("почитай книгу кобзар", WakeWord.extractCommand(listOf("почитай спіді книгу кобзар")))
         assertNull(WakeWord.extractCommand(listOf("купи спідниці і спідометр")))
