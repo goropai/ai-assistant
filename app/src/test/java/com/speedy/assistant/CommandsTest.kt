@@ -38,9 +38,18 @@ class CommandsTest {
 
     @Test
     fun englishCommands() {
-        listOf("проведи урок англійської", "давай вчити англійську", "займемося англійською", "англійська урок").forEach {
+        listOf(
+            "проведи урок англійської", "давай вчити англійську", "займемося англійською", "англійська урок",
+            // Ліна, 2026-11-17 — так її чув розпізнавач:
+            "навчи мене англійської", "навчись будь ласка мене англійської", "навчиш будь ласка мене англійської",
+            "будь ласка навчиш мене англійської", "Спіді, навчи мене, будь ласка, англійської!",
+            "можеш навчити мене англійської?", "повчи зі мною англійську",
+        ).forEach {
             assertEquals(it, LocalCommand.ENGLISH_LESSON, LocalCommands.match(it))
         }
+        // Не урок: переклад, питання про англійську.
+        assertEquals(null, LocalCommands.match("переклади на англійську я люблю каву"))
+        assertEquals(null, LocalCommands.match("хто вчитель англійської у школі"))
         assertEquals(LocalCommand.ENGLISH_PROGRESS, LocalCommands.match("як мій прогрес в англійській?"))
         assertEquals(LocalCommand.ENGLISH_LEVEL, LocalCommands.match("мій рівень англійської — середній"))
         assertEquals(LocalCommand.ENGLISH_LEVEL, LocalCommands.match("постав рівень англійської малюк"))
