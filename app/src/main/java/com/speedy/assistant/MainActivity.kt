@@ -205,6 +205,8 @@ class MainActivity : AppCompatActivity() {
             openAccessSettings = { which ->
                 // Зміна PIN: поточний (перевірка всередині), потім новий двічі.
                 if (which == "pin") com.speedy.assistant.settings.PinDialog.change(this, settings)
+                // Запис подій у календар — не налаштування, без PIN.
+                else if (which == "calendar") calendarPermission.launch(Manifest.permission.WRITE_CALENDAR)
                 // Системні доступи — лише за PIN батьків.
                 else com.speedy.assistant.settings.PinDialog.require(this, settings) {
                     if (which == "files") return@require openFileAccess()
@@ -386,6 +388,10 @@ class MainActivity : AppCompatActivity() {
     private fun hasFileAccess(): Boolean =
         if (android.os.Build.VERSION.SDK_INT >= 30) android.os.Environment.isExternalStorageManager()
         else ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private val calendarPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) toast("Без дозволу Спіді не записує в календар")
+    }
 
     private val filesPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) toast("Без доступу до файлів Спіді не бачить книг")

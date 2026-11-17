@@ -12,6 +12,8 @@
     <!-- "Який номер у Кості?", "що в мене сьогодні в календарі?", будильник і таймер -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <!-- "Запиши в календар лікаря на п'ятницю о 10" -->
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- Самооновлення: потрібен на Android 8+, на 7.1 діє глобальне "Невідомі джерела" -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />

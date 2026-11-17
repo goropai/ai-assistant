@@ -105,6 +105,45 @@ class PhoneActions(private val context: Context) {
         events
     }
 
+    /**
+     * Подія в календарі телефона (Google Календар, якщо він синхронізований — туди ж). Календар —
+     * основний із доступних для запису (Google — перевага). null — немає дозволу; false — немає календаря.
+     */
+    suspend fun addEvent(title: String, start: Long, allDay: Boolean): Boolean? = withContext(Dispatchers.IO) {
+        if (!allowed(Manifest.permission.WRITE_CALENDAR) || !allowed(Manifest.permission.READ_CALENDAR)) return@withContext null
+        val calendarId = context.contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            arrayOf(CalendarContract.Calendars._ID, CalendarContract.Calendars.IS_PRIMARY, CalendarContract.Calendars.ACCOUNT_TYPE),
+            "${CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL} >= ${CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR} AND ${CalendarContract.Calendars.VISIBLE} = 1",
+            null, null,
+        )?.use { c ->
+            val found = mutableListOf<Triple<Long, Boolean, String>>()
+            while (c.moveToNext()) found += Triple(c.getLong(0), c.getInt(1) == 1, c.getString(2).orEmpty())
+            found.maxWithOrNull(compareBy<Triple<Long, Boolean, String>> { it.second }.thenBy { it.third == "com.google" })?.first
+        } ?: return@withContext false
+        val zone = java.util.TimeZone.getDefault()
+        val values = android.content.ContentValues().apply {
+            put(CalendarContract.Events.CALENDAR_ID, calendarId)
+            put(CalendarContract.Events.TITLE, title)
+            if (allDay) {
+                // Подія на весь день — опівночі UTC того дня, тривалість добу.
+                val day = Calendar.getInstance().apply { timeInMillis = start }
+                val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
+                    clear(); set(day.get(Calendar.YEAR), day.get(Calendar.MONTH), day.get(Calendar.DAY_OF_MONTH))
+                }.timeInMillis
+                put(CalendarContract.Events.DTSTART, utc)
+                put(CalendarContract.Events.DTEND, utc + 24 * 3600_000L)
+                put(CalendarContract.Events.ALL_DAY, 1)
+                put(CalendarContract.Events.EVENT_TIMEZONE, "UTC")
+            } else {
+                put(CalendarContract.Events.DTSTART, start)
+                put(CalendarContract.Events.DTEND, start + 3600_000L)
+                put(CalendarContract.Events.EVENT_TIMEZONE, zone.id)
+            }
+        }
+        context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values) != null
+    }
+
     private fun start(intent: Intent): Boolean = try {
         context.startActivity(intent)
         true

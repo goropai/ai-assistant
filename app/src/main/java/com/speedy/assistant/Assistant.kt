@@ -668,6 +668,8 @@ class Assistant(
                 }
             }
         }
+        // Подія в календар — без моделі ("запиши в календар лікаря на п'ятницю о 10").
+        com.speedy.assistant.phone.EventParser.parse(command, System.currentTimeMillis())?.let { return addCalendarEvent(it) }
         // Нічний режим (хропіння) — без моделі.
         com.speedy.assistant.night.NightCommands.parse(command)?.let { return handleNight(it) }
         // Переклад фраз і книг — без моделі (офлайн).
@@ -1020,6 +1022,29 @@ class Assistant(
                         else -> "Не вийшло."
                     }
                 )
+            }
+        }
+    }
+
+    private suspend fun addCalendarEvent(e: com.speedy.assistant.phone.NewEvent) {
+        val p = phone ?: return say("Я поки не вмію записувати в календар.")
+        Log.i(TAG, "календар: ${e.title} ${java.util.Date(e.start)}${if (e.allDay) " (весь день)" else ""}")
+        when (p.addEvent(e.title, e.start, e.allDay)) {
+            null -> {
+                face.setMood(Mood.THINKING)
+                say("Дозволь мені записувати в календар — і скажи ще раз.")
+                openAccessSettings("calendar")
+            }
+            false -> {
+                face.setMood(Mood.SAD)
+                say("Не знайшла на телефоні календаря, куди можна записати.")
+            }
+            true -> {
+                val uk = java.util.Locale("uk", "UA")
+                val day = java.text.SimpleDateFormat("EEEE, d MMMM", uk).format(java.util.Date(e.start))
+                val time = if (e.allDay) ", на весь день" else " о " + java.text.SimpleDateFormat("H:mm", uk).format(java.util.Date(e.start))
+                face.setMood(Mood.HAPPY)
+                say("Записала в календар: ${e.title} — $day$time.")
             }
         }
     }
