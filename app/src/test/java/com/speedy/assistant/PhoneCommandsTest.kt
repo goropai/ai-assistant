@@ -36,6 +36,6 @@ class PhoneCommandsTest {
     fun nameStemFromDeclension() {
         assertEquals("Кост", PhoneCommands.nameStem("Кості"))
         assertEquals("мам", PhoneCommands.nameStem("мамі"))
-        assertEquals("Ніна", PhoneCommands.nameStem("Ніна"))
+        assertEquals("Яна", PhoneCommands.nameStem("Яна")) // коротке — як є
     }
 }

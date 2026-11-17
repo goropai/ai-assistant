@@ -192,7 +192,7 @@ class FacesTest {
 
     @Test
     fun childRecognizedWithEyesAsHighAsAdult() {
-        // Справжні заміри 2026-11-17: Ліна 0.407–0.437 (ракурс), Тарас 0.39–0.42 — Ліну впізнаємо.
+        // Справжні заміри: дитина 0.407–0.437 (ракурс), дорослий поруч 0.39–0.42 — дитину впізнаємо.
         val people = People(FaceBook(null).apply { remember("Ліна", listOf(child)) }, ageOf = { if (it == "Ліна") "CHILD" else "UNKNOWN" })
         val kid = FaceObservation(child, 0.15f, eyeLevel = 0.41f)
         people.update(0, listOf(kid))
