@@ -47,6 +47,20 @@ class People(
      * Прив'язати ім'я до щойно баченого незнайомого обличчя — лише після перевірки проти
      * всіх відомих облич: схоже на когось — нове ім'я не створюємо.
      */
+    /**
+     * "Я Ліна" посеред розмови, а впізнає її погано: незнайомі кадри, що вже трохи схожі на неї
+     * (≥ 0.5), — до її образу. Чужі обличчя не додаються (на відміну від [introduce] нового імені).
+     */
+    @Synchronized
+    fun refresh(name: String, now: Long): Boolean {
+        val known = book.names.firstOrNull { it.equals(name, ignoreCase = true) } ?: return false
+        val theirs = tracker.recentStranger(now).filter { book.match(it, FaceBook.POSSIBLE_MATCH)?.first == known }
+        if (theirs.isEmpty()) return false
+        book.remember(known, theirs)
+        tracker.clearStranger()
+        return true
+    }
+
     @Synchronized
     fun introduce(name: String, now: Long): Introduction {
         val samples = tracker.recentStranger(now)

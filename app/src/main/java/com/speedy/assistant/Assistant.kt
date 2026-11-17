@@ -428,6 +428,7 @@ class Assistant(
         awaitingCommandUntil = 0
         lastInteraction = SystemClock.uptimeMillis()
         inConversation = true
+        noteClaimedName(candidates)
         noteVoice()
         // Дитина: денний ліміт розмов. Вичерпано — Спіді "втомилась" (без моделі).
         if (childLimit != null && childSpeaking() && LocalCommands.match(command) != LocalCommand.STOP) {
@@ -459,6 +460,7 @@ class Assistant(
         scope.launch {
             while (busy) delay(100)
             lastInteraction = SystemClock.uptimeMillis()
+            noteClaimedName(listOf(text))
             runBusy { handle(text) }
         }
     }
@@ -1551,8 +1553,33 @@ class Assistant(
     private fun notesCount(n: Int) = "У тебе $n ${com.speedy.assistant.english.EnglishLesson.plural(n, "нове повідомлення", "нові повідомлення", "нових повідомлень")}"
 
     /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */
+    /** "Я Ліна" у репліці — хто говорить, сказано прямо (сильніше за найближче обличчя в кадрі). */
+    private var claimed: Pair<String, Long>? = null
+
+    /** Знайоме ім'я після "я" будь-де у фразі ("привіт, я Ліна, а ти що робиш") — співрозмовник. */
+    private fun noteClaimedName(candidates: List<String>) {
+        val p = people ?: return
+        val now = SystemClock.uptimeMillis()
+        for (c in candidates) {
+            for (m in CLAIM.findAll(c.lowercase())) {
+                // Лише точний збіг за звучанням ("міра" ~ "Міра"): "я знаю", "я тут" не мають стати іменем.
+                val key = People.soundKey(m.groupValues[1])
+                val name = p.names().firstOrNull { People.soundKey(it) == key } ?: continue
+                claimed = name to now
+                val refreshed = p.refresh(name, now)
+                Log.i(TAG, "говорить $name (сказала сама)${if (refreshed) " — образ обличчя уточнено" else ""}")
+                return
+            }
+        }
+    }
+
     private fun partner(): String? {
         val now = SystemClock.uptimeMillis()
+        // Сказала "я Ліна" — вона, поки розмова свіжа; але свіжий дорослий голос дитиною не робимо.
+        claimed?.takeIf { now - it.second < CLAIM_MS }?.first?.let { name ->
+            val child = profiles?.age(name) == com.speedy.assistant.people.Profiles.Age.CHILD
+            if (!(child && voiceSaysChild() == false)) return name
+        }
         val closest = people?.speaker(now) ?: return null
         // Говорить дитина (тон голосу), а найближче — дорослий (тримає телефон, сидить поруч):
         // співрозмовник — дитина в кадрі, якщо її впізнали, інакше не знаємо. Не приписуємо дорослому
@@ -1871,6 +1898,9 @@ class Assistant(
         /** Просте "продовжуй" — про книгу, якщо читали протягом цього часу. */
         const val BARE_CONTINUE_MS = 30 * 60_000L
         const val MAX_LISTED = 6
+        /** "Я Ліна" діє стільки після останньої такої репліки. */
+        const val CLAIM_MS = 3 * 60_000L
+        private val CLAIM = Regex("(?:^|[\\s,])я\\s+(\\p{L}[\\p{L}'’-]+)")
         /** Нічний режим — до цієї години, якщо не сказали інакше. */
         const val DEFAULT_WAKE_HOUR = 7
         const val BOOK_FORMATS = "EPUB, FB2, PDF чи TXT"

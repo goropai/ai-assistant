@@ -14,7 +14,13 @@ class CommandsTest {
         assertEquals("", WakeWord.extractCommand(listOf("Спіді!")))
         assertEquals("онови застосунок", WakeWord.extractCommand(listOf("привіт", "Гей, Спіді, онови застосунок")))
         assertNull(WakeWord.extractCommand(listOf("спідометр показує сто")))
-        assertNull(WakeWord.extractCommand(listOf("що там спіді")))
+        // Будь-де у фразі — звертання (і без коми).
+        assertEquals("що там", WakeWord.extractCommand(listOf("що там спіді")))
+        assertEquals("так, що ти бачиш", WakeWord.extractCommand(listOf("так, Спіді, що ти бачиш")))
+        assertEquals("почитай книгу кобзар", WakeWord.extractCommand(listOf("почитай спіді книгу кобзар")))
+        assertNull(WakeWord.extractCommand(listOf("купи спідниці і спідометр")))
+        // "Привіт, спить, я Міра…" — так Google чув "Привіт, Спіді"; "спить кіт" — ні.
+        assertEquals("Я Ліна А ти що робиш", WakeWord.extractCommand(listOf("Привіт спить Я Ліна А ти що робиш")))
     }
 
     @Test
