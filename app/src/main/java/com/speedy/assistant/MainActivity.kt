@@ -492,6 +492,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        // Спіді закрили (змахнули з недавніх) — міні-копія служби не лишається висіти.
+        hideMiniSpeedy()
         if (assistant != null) {
             unregisterReceiver(batteryReceiver)
             if (BuildConfig.DEBUG) unregisterReceiver(debugReceiver)

@@ -18,13 +18,34 @@ class SpeedyHands : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         Log.i(TAG, "керування застосунками увімкнено")
+        registerReceiver(screenReceiver, android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_SCREEN_OFF)
+            addAction(android.content.Intent.ACTION_USER_PRESENT)
+        })
     }
 
     override fun onDestroy() {
         hideMini()
+        try { unregisterReceiver(screenReceiver) } catch (_: Exception) {}
         if (instance === this) instance = null
         super.onDestroy()
     }
+
+    /** Спіді змахнули з недавніх — міні-копія не лишається висіти сама. */
+    override fun onTaskRemoved(rootIntent: android.content.Intent?) {
+        Log.i(TAG, "Спіді закрили — ховаю міні-копію")
+        hideMini()
+        super.onTaskRemoved(rootIntent)
+    }
+
+    /** Вікна служби видно й поверх екрана блокування — там міні-Спіді не показуємо. */
+    private val screenReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: android.content.Intent) {
+            overlay?.visibility = if (intent.action == android.content.Intent.ACTION_SCREEN_OFF) android.view.View.GONE else android.view.View.VISIBLE
+        }
+    }
+
+    private fun locked() = (getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event?.packageName?.toString()?.takeIf { event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED }
@@ -154,6 +175,7 @@ class SpeedyHands : AccessibilityService() {
             }
             true
         }
+        if (locked()) view.visibility = android.view.View.GONE // з'явиться після розблокування
         try {
             wm.addView(view, params)
             overlay = view
