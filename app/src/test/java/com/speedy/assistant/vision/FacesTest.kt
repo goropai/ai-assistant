@@ -54,6 +54,37 @@ class FacesTest {
     }
 
     @Test
+    fun knownButPoorlySeenChildIsRefreshedNotLooped() {
+        // Ліна знайома, але зараз її відбиток слабко схожий (0.5–0.6: далеко, ракурс) — "незнайомка".
+        val people = People(FaceBook(null).apply { remember("Ліна", listOf(child)) })
+        val blurry = FaceObservation(vec(0.84f, 0.54f, 0f), 0.1f) // схожість з Ліною ~0.54: між 0.5 і порогом 0.6
+        people.update(0, listOf(blurry))
+        people.update(1500, listOf(blurry))
+        // "Ліна" — кадри, схожі на неї хоч трохи, додаються до її образу (а не "погано роздивилась" без кінця).
+        assertEquals(People.Introduction.Remembered, people.introduce("Ліна", 2000))
+        people.update(3000, listOf(blurry))
+        people.update(4500, listOf(blurry))
+        assertEquals(listOf("Ліна"), people.presentNames(4500))
+    }
+
+    @Test
+    fun unclearFramesAreNotReused() {
+        // Неузгоджені кадри (різні обличчя) — "погано роздивилась", і наступна спроба вже не з них.
+        val people = People(FaceBook(null))
+        people.update(0, listOf(FaceObservation(adult, 0.1f)))
+        people.update(1500, listOf(FaceObservation(child, 0.1f)))
+        assertEquals(People.Introduction.Unclear, people.introduce("Ліна", 2000))
+        assertEquals(People.Introduction.NoFace, people.introduce("Ліна", 2500))
+    }
+
+    @Test
+    fun requestIsNotAName() {
+        assertNull(LocalCommands.parseName("будь ласка", answer = true))
+        assertNull(LocalCommands.parseName("навчи мене", answer = true))
+        assertEquals("Ліна", LocalCommands.parseName("ліна", answer = true))
+    }
+
+    @Test
     fun tinyBackgroundFaceIsNotAsked() {
         val people = People(FaceBook(null))
         val far = FaceObservation(child, 0.01f)

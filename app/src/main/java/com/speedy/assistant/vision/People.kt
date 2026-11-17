@@ -51,6 +51,16 @@ class People(
     fun introduce(name: String, now: Long): Introduction {
         val samples = tracker.recentStranger(now)
         if (samples.isEmpty()) return Introduction.NoFace
+        // Знайома, яку зараз погано впізнає (далеко, ракурс): кадри, хоч трохи схожі на неї, —
+        // до її образу, щоб далі впізнавала. Інакше "погано роздивилась" повторювалось би без кінця.
+        book.names.firstOrNull { it.equals(name, ignoreCase = true) }?.let { known ->
+            val theirs = samples.filter { book.match(it, FaceBook.POSSIBLE_MATCH)?.first == known }
+            if (theirs.isNotEmpty()) {
+                book.remember(known, theirs)
+                tracker.clearStranger()
+                return Introduction.Remembered
+            }
+        }
         return when (val check = book.check(samples)) {
             is FaceBook.Check.New -> {
                 book.remember(name, check.samples)
@@ -63,7 +73,11 @@ class People(
                     tracker.clearStranger()
                     Introduction.Remembered
                 } else Introduction.LooksLike(check.name)
-            FaceBook.Check.Unclear -> Introduction.Unclear
+            FaceBook.Check.Unclear -> {
+                // Ці кадри не годяться — наступна спроба з нових (а не з тих самих, що й щойно).
+                tracker.clearStranger()
+                Introduction.Unclear
+            }
         }
     }
 

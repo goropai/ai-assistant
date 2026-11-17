@@ -243,20 +243,36 @@ class Assistant(
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
     }
 
+    /** Скільки разів поспіль "погано роздивилась" — більше одного повтору не просимо. */
+    private var unclearIntroductions = 0
+
     private suspend fun introduce(name: String) {
         awaitingName = false
         val p = people ?: return say("Я поки не вмію запам'ятовувати обличчя.")
+        // Уже впізнала її в кадрі — знайомитись нема чого.
+        if (p.presentNames(SystemClock.uptimeMillis()).any { it.equals(name, ignoreCase = true) }) {
+            unclearIntroductions = 0
+            face.setMood(Mood.HAPPY)
+            return say("Так, я знаю, ти $name!")
+        }
+        val knownBefore = p.knows(name)
         val introduced = p.introduce(name, SystemClock.uptimeMillis())
         Log.i(TAG, "знайомство $name: $introduced")
+        if (introduced != People.Introduction.Unclear) unclearIntroductions = 0
         if (introduced == People.Introduction.Remembered) {
             face.setMood(Mood.HAPPY)
             chirps.play(Chirp.HAPPY)
-            say("Приємно познайомитись, $name! Я тебе запам'ятала.")
+            say(if (knownBefore) "$name! Тепер я впізнаватиму тебе краще." else "Приємно познайомитись, $name! Я тебе запам'ятала.")
         } else if (introduced is People.Introduction.LooksLike) {
             face.setMood(Mood.THINKING)
             say("Ти дуже схожий на ${introduced.name}. Якщо я помиляюсь, скажи: «це не ${introduced.name}, це $name».")
         } else if (introduced == People.Introduction.Unclear) {
             face.setMood(Mood.THINKING)
+            if (++unclearIntroductions > 1) {
+                // Удруге не вийшло — не мучимо дитину ("погано роздивилась" звучало без кінця).
+                unclearIntroductions = 0
+                return say("Нічого, роздивлюсь тебе пізніше. Що будемо робити?")
+            }
             say("Я тебе погано роздивилась. Підійди ближче, подивись на мене і скажи своє ім'я ще раз.")
             // Чекаємо ім'я знову: "я Ліна" наступною фразою теж підійде.
             awaitingName = true
@@ -367,6 +383,8 @@ class Assistant(
                 return
             }
         }
+        // "Будь ласка, навчи мене англійської" у відповідь на "як тебе звати?" — команда, а не ім'я.
+        if (awaitingName && candidates.any { LocalCommands.match(it) != null }) awaitingName = false
         if (awaitingName && inWindow && WakeWord.extractCommand(candidates) == null) {
             val name = candidates.firstNotNullOfOrNull { LocalCommands.parseName(it, answer = true) }
             if (name != null) {
