@@ -242,6 +242,10 @@ class MainActivity : AppCompatActivity() {
         // Тихо оновити адресу платформи: роутер міг видати їй нову IP.
         lifecycleScope.launch { robot.rediscover() }
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        // Лише debug: adb shell am broadcast -a com.speedy.assistant.debug.HEAR --es text "почитай книгу"
+        if (BuildConfig.DEBUG) {
+            ContextCompat.registerReceiver(this, debugReceiver, IntentFilter(DEBUG_HEAR), ContextCompat.RECEIVER_EXPORTED)
+        }
         connectivity.registerDefaultNetworkCallback(networkCallback)
         // Спіді запустилась — усе, що вже на шторці, прочитане; читаємо лише ті, що прийдуть.
         com.speedy.assistant.phone.NotificationStore.notes.markAllRead()
@@ -426,6 +430,12 @@ class MainActivity : AppCompatActivity() {
         super.onPause()
     }
 
+    private val debugReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            intent.getStringExtra("text")?.takeIf { it.isNotBlank() }?.let { assistant?.debugHear(it) }
+        }
+    }
+
     private val batteryAlerts = BatteryAlerts()
 
     private val batteryReceiver = object : BroadcastReceiver() {
@@ -473,6 +483,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         if (assistant != null) {
             unregisterReceiver(batteryReceiver)
+            if (BuildConfig.DEBUG) unregisterReceiver(debugReceiver)
             connectivity.unregisterNetworkCallback(networkCallback)
         }
         assistant?.release()
@@ -497,4 +508,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+
+    private companion object {
+        const val DEBUG_HEAR = "com.speedy.assistant.debug.HEAR"
+    }
 }

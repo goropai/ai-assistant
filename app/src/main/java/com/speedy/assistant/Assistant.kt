@@ -422,6 +422,17 @@ class Assistant(
         runBusy { if (command.isBlank()) greet() else handle(command) }
     }
 
+    /** Лише debug-збірка: фраза з adb так, ніби її почули (перевірка команд без голосу). */
+    fun debugHear(text: String) {
+        Log.i(TAG, "debug: \"$text\"")
+        if (busy) interrupt()
+        scope.launch {
+            while (busy) delay(100)
+            lastInteraction = SystemClock.uptimeMillis()
+            runBusy { handle(text) }
+        }
+    }
+
     private fun runBusy(block: suspend () -> Unit) {
         busy = true
         onBusyChanged(true)
@@ -1635,6 +1646,7 @@ class Assistant(
             }
             return say(text)
         }
+        Log.d(TAG, "каже ($lang): $text")
         face.setSpeaking(true)
         try {
             voice.speak(text, locale = lang.locale)
@@ -1644,6 +1656,7 @@ class Assistant(
     }
 
     private suspend fun say(text: String) {
+        Log.d(TAG, "каже: $text")
         face.setSpeaking(true)
         try {
             voice.speak(text)

@@ -55,7 +55,8 @@ object Sentences {
             }
             if (buf.isNotEmpty() && buf.length + 1 + s.length > target) flush()
             if (first < 0) first = i
-            if (buf.isNotEmpty()) buf.append(' ')
+            // Заголовок ("Chapter 1", "Глава 2") без крапки — крапка, щоб синтезатор зробив паузу.
+            if (buf.isNotEmpty()) buf.append(if (buf.last() in ENDS || buf.last() in CLOSING) " " else ". ")
             buf.append(s)
         }
         flush()

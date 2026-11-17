@@ -38,6 +38,8 @@ class BooksTest {
         val chunks = Sentences.chunks(sentences, target = 100)
         assertEquals(0, chunks.first().first)
         assertEquals(sentences.joinToString(" "), chunks.joinToString(" ") { it.text })
+        // Заголовок без крапки не зливається з першим реченням.
+        assertEquals("Chapter 1. Clean code reads well.", Sentences.chunks(listOf("Chapter 1", "Clean code reads well.")).single().text)
         // Продовження з 7-го речення — перший фрагмент саме з нього.
         val resumed = Sentences.chunks(sentences, from = 7, target = 100)
         assertEquals(7, resumed.first().first)
