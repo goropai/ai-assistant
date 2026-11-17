@@ -42,6 +42,9 @@ class OfflineEar(private val context: Context) {
     /** Новий розпізнавач для одного сеансу (не потокобезпечний — один потік). */
     fun recognizer(): Recognizer? = model?.let { Recognizer(it, RATE.toFloat()).apply { setMaxAlternatives(3) } }
 
+    /** Розпізнавач із моделлю мовця — щоб отримати відбиток голосу (вектор "spk"). */
+    fun speakerRecognizer(spk: org.vosk.SpeakerModel): Recognizer? = model?.let { Recognizer(it, RATE.toFloat(), spk) }
+
     private fun download(http: OkHttpClient) {
         // Архів, покладений вручну (adb push у папку застосунку) — без інтернету.
         val pushed = File(context.getExternalFilesDir(null), ZIP_NAME)

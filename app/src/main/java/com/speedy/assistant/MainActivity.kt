@@ -73,6 +73,8 @@ class MainActivity : AppCompatActivity() {
 
     private val llm by lazy { ConfiguredLlm(http, settings) }
     private val offlineEar by lazy { com.speedy.assistant.voice.OfflineEar(this) }
+    /** Відбиток голосу (тембр) — модель мовця Vosk, після моделі офлайн-слуху. */
+    private val voicePrints by lazy { com.speedy.assistant.voice.VoicePrints(this, offlineEar) }
     private val englishCourse by lazy {
         com.speedy.assistant.english.EnglishCourse(
             context = this,
@@ -233,6 +235,8 @@ class MainActivity : AppCompatActivity() {
             vlc = vlc,
             translator = com.speedy.assistant.translate.MlKitTranslator(),
             night = nightWatch,
+            voicePrints = voicePrints,
+            voiceBook = com.speedy.assistant.voice.VoiceBook(db),
             nightLog = nightLog,
             onNight = { on -> runOnUiThread { setNightMode(on) } },
             hasFileAccess = ::hasFileAccess,
@@ -273,6 +277,17 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (!offlineEar.ready) delay(10 * 60_000)
+            }
+            // Модель мовця (14 МБ) — так само: через Wi-Fi, один раз; без неї просто немає відбитка голосу.
+            while (isActive && !voicePrints.ready) {
+                if (voicePrints.downloaded || !connectivity.isActiveNetworkMetered) {
+                    try {
+                        voicePrints.prepare(http)
+                    } catch (e: Exception) {
+                        android.util.Log.w("MainActivity", "відбиток голосу недоступний: ${e.message}")
+                    }
+                }
+                if (!voicePrints.ready) delay(10 * 60_000)
             }
         }
         lifecycleScope.launch {

@@ -88,6 +88,36 @@ class VoiceListener(
     private fun shown(phrases: List<String>): Any =
         if (com.speedy.assistant.settings.PinDialog.awaitingVoice) "[приховано: вводять PIN]" else phrases
 
+    /** Скільки звуку фрази віддав Google (onBufferReceived) — у журнал; на J5 може й не віддавати. */
+    private var googleBytes = 0
+
+    /**
+     * Звук поточної фрази — для відбитка голосу (хто говорить): початок, який чув вартовий, звук від
+     * Google (якщо віддає) або вся фраза в офлайн-режимі. Мікрофон під час розпізнавання Google
+     * належить йому, тож часто є лише перша секунда.
+     */
+    private val audioLock = Any()
+    private val pending = ArrayList<ShortArray>()
+
+    /** Звук останньої почутої фрази (null — не було) і коли. Читати в onPhrase. */
+    @Volatile var lastUtterance: ShortArray? = null; private set
+    @Volatile var lastUtteranceAt = 0L; private set
+
+    private fun addAudio(chunk: ShortArray) = synchronized(audioLock) { if (pending.sumOf { it.size } < MAX_AUDIO) pending += chunk }
+
+    private fun resetAudio() = synchronized(audioLock) { pending.clear() }
+
+    /** Фраза почута — звук, що зібрався, стає [lastUtterance]. */
+    private fun finishAudio() = synchronized(audioLock) {
+        val total = pending.sumOf { it.size }
+        lastUtterance = if (total == 0) null else ShortArray(total).also { out ->
+            var at = 0
+            for (c in pending) { c.copyInto(out, at); at += c.size }
+        }
+        lastUtteranceAt = SystemClock.uptimeMillis()
+        pending.clear()
+    }
+
     fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
 
     /** @param listenNow одразу сеанс розпізнавання (Спіді щойно спитала і чекає відповіді). */
@@ -168,6 +198,9 @@ class VoiceListener(
                     val extra = ShortArray(FRAME)
                     if (record.read(extra, 0, FRAME) > 0) preroll.addLast(extra)
                 }
+                // Початок фрази — для відбитка голосу (Google далі звук не віддає).
+                resetAudio()
+                preroll.forEach { addAudio(it) }
                 Pitch.ofSpeech(preroll.toList().takeLast(PREROLL_FRAMES))?.let {
                     lastPitchHz = it
                     lastPitchAt = SystemClock.uptimeMillis()
@@ -198,16 +231,17 @@ class VoiceListener(
         try {
             var final: String? = null
             for (frame in preroll) if (recognizer.acceptWaveForm(frame, frame.size)) { final = recognizer.result; break }
-            val buffer = ShortArray(FRAME)
             while (final == null && guard === Thread.currentThread() && !Thread.currentThread().isInterrupted) {
+                val buffer = ShortArray(FRAME)
                 val n = record.read(buffer, 0, FRAME)
                 if (n <= 0) continue
+                addAudio(if (n == FRAME) buffer else buffer.copyOf(n)) // офлайн — уся фраза для відбитка голосу
                 if (recognizer.acceptWaveForm(buffer, n)) final = recognizer.result
                 else if (SystemClock.uptimeMillis() - started > MAX_UTTERANCE_MS) final = recognizer.finalResult
             }
             val phrases = final?.let { OfflineEar.phrases(it) }.orEmpty()
             Log.d(TAG, "офлайн почула (${SystemClock.uptimeMillis() - started} мс): ${shown(phrases)}")
-            if (phrases.isNotEmpty()) handler.post { if (active) onPhrase(phrases) }
+            if (phrases.isNotEmpty()) { finishAudio(); handler.post { if (active) onPhrase(phrases) } } else resetAudio()
         } catch (e: Exception) {
             Log.w(TAG, "offline recognition failed", e)
         } finally {
@@ -315,7 +349,9 @@ class VoiceListener(
             val phrases = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
             // Упевненість розпізнавача в першому варіанті — "вухо" для оцінки вимови.
             lastConfidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull()
-            Log.d(TAG, "heard: ${shown(phrases)}")
+            Log.d(TAG, "heard: ${shown(phrases)} (звук від Google: $googleBytes байт)")
+            googleBytes = 0
+            if (phrases.isNotEmpty()) finishAudio() else resetAudio()
             if (phrases.isNotEmpty()) sessionUntil = SystemClock.uptimeMillis() + SESSION_MS
             // onPhrase може викликати stop() — тоді перезапуску не буде.
             if (phrases.isNotEmpty()) onPhrase(phrases)
@@ -323,6 +359,7 @@ class VoiceListener(
         }
 
         override fun onError(error: Int) {
+            resetAudio() // звук невдалої спроби не має приклеїтись до наступної фрази
             if (preferOffline) {
                 offlineFailures = if (error == SpeechRecognizer.ERROR_CLIENT) offlineFailures + 1 else 0
                 if (offlineFailures >= 2) {
@@ -353,7 +390,12 @@ class VoiceListener(
 
         override fun onReadyForSpeech(params: Bundle?) {}
         override fun onRmsChanged(rmsdB: Float) {}
-        override fun onBufferReceived(buffer: ByteArray?) {}
+        override fun onBufferReceived(buffer: ByteArray?) {
+            val b = buffer ?: return
+            googleBytes += b.size
+            // PCM 16 біт, little-endian (якщо Google взагалі віддає звук).
+            addAudio(ShortArray(b.size / 2) { ((b[it * 2].toInt() and 0xff) or (b[it * 2 + 1].toInt() shl 8)).toShort() })
+        }
         override fun onEndOfSpeech() {}
         override fun onPartialResults(partialResults: Bundle?) {}
         override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -369,6 +411,8 @@ class VoiceListener(
         /** Скільки кадрів мовлення дочитати після спрацювання вартового для оцінки тону. */
         private const val PITCH_EXTRA_FRAMES = 12
         private const val MAX_UTTERANCE_MS = 15_000L
+        /** Звуку фрази для відбитка голосу — не більше 8 с. */
+        private const val MAX_AUDIO = RATE * 8
         /** Скільки слухати після останньої почутої мови, перш ніж повернутися до вартового. */
         private const val SESSION_MS = 8_000L
         /**

@@ -89,6 +89,9 @@ class Assistant(
     private val translator: com.speedy.assistant.translate.Translator? = null,
     /** Нічний режим: слухати хропіння до ранку. */
     private val night: com.speedy.assistant.night.NightWatch? = null,
+    /** Відбиток голосу: модель мовця і знайомі голоси. */
+    private val voicePrints: com.speedy.assistant.voice.VoicePrints? = null,
+    private val voiceBook: com.speedy.assistant.voice.VoiceBook? = null,
     private val nightLog: com.speedy.assistant.night.NightLog? = null,
     /** Увімкнули / вимкнули нічний режим — приглушити екран, вимкнути камеру. */
     private val onNight: (Boolean) -> Unit = {},
@@ -430,26 +433,64 @@ class Assistant(
         inConversation = true
         noteClaimedName(candidates)
         noteVoice()
-        // Дитина: денний ліміт розмов. Вичерпано — Спіді "втомилась" (без моделі).
-        if (childLimit != null && childSpeaking() && LocalCommands.match(command) != LocalCommand.STOP) {
-            val kid = partner() ?: "дитина"
-            if (childLimit.exhausted(kid, childLimitMinutes(), System.currentTimeMillis())) {
-                Log.i(TAG, "ліміт дитини ($kid) вичерпано")
-                childLimit.seen(kid, System.currentTimeMillis()) // поруч — 4 години до скидання рахуємо звідси
-                inConversation = false
-                runBusy {
-                    face.setMood(Mood.SLEEPY)
-                    say(listOf(
-                        "Ой, я так втомилася… Хочу трохи відпочити. Пограємо пізніше!",
-                        "Мої батарейки втомилися, мені треба поспати. Побачимось пізніше!",
-                        "Я вже дуже хочу відпочити. Давай трохи згодом, добре?",
-                    ).random())
-                }
-                return
-            }
-            childLimit.talk(kid, System.currentTimeMillis())
+        // Звук фрази — для відбитка голосу (хто говорить), якщо свіжий.
+        val audio = ears.lastUtterance?.takeIf { SystemClock.uptimeMillis() - ears.lastUtteranceAt < 5_000 }
+        runBusy {
+            identifyVoice(audio)
+            if (childTired(command)) return@runBusy
+            if (command.isBlank()) greet() else handle(command)
         }
-        runBusy { if (command.isBlank()) greet() else handle(command) }
+    }
+
+    /**
+     * Дитина: денний ліміт розмов. Вичерпано — Спіді "втомилась" (без моделі). Після визначення
+     * голосу — щоб знати, хто насправді говорить. @return true — далі не відповідаємо.
+     */
+    private suspend fun childTired(command: String): Boolean {
+        val limit = childLimit ?: return false
+        if (!childSpeaking() || LocalCommands.match(command) == LocalCommand.STOP) return false
+        val kid = partner() ?: "дитина"
+        val now = System.currentTimeMillis()
+        if (!limit.exhausted(kid, childLimitMinutes(), now)) {
+            limit.talk(kid, now)
+            return false
+        }
+        Log.i(TAG, "ліміт дитини ($kid) вичерпано")
+        limit.seen(kid, now) // поруч — 4 години до скидання рахуємо звідси
+        inConversation = false
+        face.setMood(Mood.SLEEPY)
+        say(listOf(
+            "Ой, я так втомилася… Хочу трохи відпочити. Пограємо пізніше!",
+            "Мої батарейки втомилися, мені треба поспати. Побачимось пізніше!",
+            "Я вже дуже хочу відпочити. Давай трохи згодом, добре?",
+        ).random())
+        return true
+    }
+
+    /** Хто говорить за голосом (ця фраза): ім'я, схожість, коли. */
+    private var voiceGuess: Triple<String, Float, Long>? = null
+
+    /**
+     * Відбиток голосу цієї фрази: впізнати (сильний збіг — співрозмовник, навіть якщо ближче інше
+     * обличчя) і, коли хто говорить відомо напевно, — додати до його голосів. Не довше 0.8 с.
+     */
+    private suspend fun identifyVoice(audio: ShortArray?) {
+        val prints = voicePrints?.takeIf { it.ready } ?: return
+        val book = voiceBook ?: return
+        val pcm = audio ?: return
+        val vector = kotlinx.coroutines.withTimeoutOrNull(800) { withContext(Dispatchers.Default) { prints.embed(pcm) } } ?: return
+        val now = SystemClock.uptimeMillis()
+        val match = book.match(vector)
+        voiceGuess = match?.let { Triple(it.first, it.second, now) }
+        Log.i(TAG, "голос: ${match?.let { "схожий на ${it.first} (${"%.2f".format(it.second)})" } ?: "ще нікого не знаю"}")
+        // Вчимо голос лише тоді, коли хто говорить відомо напевно: сказала "я Ліна" щойно, або
+        // в кадрі одна знайома людина й ніхто з голосів не суперечить.
+        val sure = claimed?.takeIf { now - it.second < 10_000 }?.first
+            ?: people?.presentNames(now)?.singleOrNull()?.takeIf { it == people.speaker(now) && (match == null || match.first == it || match.second < com.speedy.assistant.voice.VoiceBook.STRONG) }
+        if (sure != null) {
+            book.enroll(sure, vector)
+            Log.i(TAG, "голос $sure запам'ятала")
+        }
     }
 
     /** Лише debug-збірка: фраза з adb так, ніби її почули (перевірка команд без голосу). */
@@ -613,6 +654,7 @@ class Assistant(
                     ?: return say("Я не бачу, кого забути. Подивись на мене.")
                 people.forget(name)
                 profiles?.forget(name)
+                voiceBook?.forget(name)
                 face.setMood(Mood.SAD)
                 return say("Добре, я забула тебе, $name.")
             }
@@ -622,6 +664,7 @@ class Assistant(
                 val name = p.findName(spoken) ?: return say("Я не знаю нікого на ім'я ${spoken.replaceFirstChar { it.uppercase() }}.")
                 p.forget(name)
                 profiles?.forget(name)
+                voiceBook?.forget(name)
                 Log.i(TAG, "забула ім'я $name")
                 face.setMood(Mood.NEUTRAL)
                 return say("Добре, забула $name.")
@@ -813,7 +856,7 @@ class Assistant(
     /** Ім'я зникло (жартівливе) — його профіль переходить до правильного імені. */
     private fun moveProfiles(oldNames: List<String>, newName: String) {
         val p = people ?: return
-        oldNames.filter { it != newName && !p.knows(it) }.forEach { profiles?.rename(it, newName) }
+        oldNames.filter { it != newName && !p.knows(it) }.forEach { profiles?.rename(it, newName); voiceBook?.rename(it, newName) }
     }
 
     /** "о 18:00", "завтра о 9:00", "через 20 хв". */
@@ -1580,6 +1623,8 @@ class Assistant(
             val child = profiles?.age(name) == com.speedy.assistant.people.Profiles.Age.CHILD
             if (!(child && voiceSaysChild() == false)) return name
         }
+        // Голос цієї фрази впевнено чийсь — це він, навіть якщо ближче до камери інше обличчя.
+        voiceGuess?.takeIf { now - it.third < VOICE_FRESH_MS && it.second >= com.speedy.assistant.voice.VoiceBook.STRONG }?.first?.let { return it }
         val closest = people?.speaker(now) ?: return null
         // Говорить дитина (тон голосу), а найближче — дорослий (тримає телефон, сидить поруч):
         // співрозмовник — дитина в кадрі, якщо її впізнали, інакше не знаємо. Не приписуємо дорослому
@@ -1900,6 +1945,8 @@ class Assistant(
         const val MAX_LISTED = 6
         /** "Я Ліна" діє стільки після останньої такої репліки. */
         const val CLAIM_MS = 3 * 60_000L
+        /** Відбиток голосу діє для фрази й відповіді на неї. */
+        const val VOICE_FRESH_MS = 30_000L
         private val CLAIM = Regex("(?:^|[\\s,])я\\s+(\\p{L}[\\p{L}'’-]+)")
         /** Нічний режим — до цієї години, якщо не сказали інакше. */
         const val DEFAULT_WAKE_HOUR = 7
