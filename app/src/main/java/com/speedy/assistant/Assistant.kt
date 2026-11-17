@@ -763,6 +763,15 @@ class Assistant(
                     }
                     reply = ask(Brain.navFollowUp(action.direction, ms, outcome, status?.distanceCm, steps), jpeg)
                 }
+                "command" -> {
+                    if (reply.say.isNotBlank()) speak(reply)
+                    if (!runModelCommand(action.query)) {
+                        Log.w(TAG, "модель: невідома команда \"${action.query}\"")
+                        face.setMood(Mood.THINKING)
+                        say("Ой, цього я поки не вмію.")
+                    }
+                    return
+                }
                 "stop" -> {
                     robot.stop()
                     return speak(reply)
@@ -770,6 +779,33 @@ class Assistant(
                 else -> return speak(reply)
             }
         }
+    }
+
+    /**
+     * Команда від моделі (дія "command"): ті самі розбори, що й для голосу, але лише з дозволеного
+     * переліку — без налаштувань, PIN, доступів, керування застосунками й знайомств.
+     * @return false — не розпізнали (модель не повторюємо, щоб не зациклитись).
+     */
+    private suspend fun runModelCommand(command: String): Boolean {
+        if (command.isBlank()) return false
+        Log.i(TAG, "модель просить: \"$command\"")
+        when (LocalCommands.match(command)) {
+            LocalCommand.ENGLISH_LESSON, LocalCommand.ENGLISH_PROGRESS, LocalCommand.REMIND, LocalCommand.LIST_REMINDERS,
+            LocalCommand.TIME, LocalCommand.WEATHER, LocalCommand.WHERE, LocalCommand.BATTERY -> {
+                handle(command) // кожна з цих гілок завершується сама — до моделі не повертається
+                return true
+            }
+            null -> {}
+            else -> return false // налаштування, PIN, вік, знайомства, оновлення — лише людина
+        }
+        com.speedy.assistant.phone.EventParser.parse(command, System.currentTimeMillis())?.let { addCalendarEvent(it); return true }
+        com.speedy.assistant.night.NightCommands.parse(command)?.let { handleNight(it); return true }
+        com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return true }
+        com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return true }
+        com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return true }
+        val phoneCmd = com.speedy.assistant.phone.PhoneCommands.parse(command)
+        if (phoneCmd is com.speedy.assistant.phone.PhoneCommand.TodayCalendar) return handlePhone(phoneCmd)
+        return false
     }
 
     /** Ім'я зникло (жартівливе) — його профіль переходить до правильного імені. */

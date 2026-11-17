@@ -71,4 +71,16 @@ class BrainTest {
         brain.ask("п'яте") // 10 > 8 → лишаємо 4
         assertEquals(4, brain.size)
     }
+
+    @Test
+    fun modelCanAskForSpeedyCommand() {
+        val r = com.speedy.assistant.brain.AgentReply.parse(
+            """{"mood":"happy","say":"Давай!","action":{"type":"command","camera":"none","direction":"none","duration_ms":0,"then_look":false,"query":"урок англійської"},"remember":""}"""
+        )
+        org.junit.Assert.assertEquals("command", r.action.type)
+        org.junit.Assert.assertEquals("урок англійської", r.action.query)
+        // Обидві схеми (Claude і Gemini) дозволяють "command".
+        org.junit.Assert.assertTrue(com.speedy.assistant.brain.AgentReply.jsonSchema().toString().contains("\"command\""))
+        org.junit.Assert.assertTrue(com.speedy.assistant.brain.AgentReply.geminiSchema().toString().contains("\"command\""))
+    }
 }

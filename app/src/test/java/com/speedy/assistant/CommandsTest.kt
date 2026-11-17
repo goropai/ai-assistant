@@ -50,6 +50,9 @@ class CommandsTest {
         // Не урок: переклад, питання про англійську.
         assertEquals(null, LocalCommands.match("переклади на англійську я люблю каву"))
         assertEquals(null, LocalCommands.match("хто вчитель англійської у школі"))
+        // "поклич мене нагадуванням" — не знайомство з іменем "Нагадуванням".
+        assertEquals(null, LocalCommands.parseName("поклич мене нагадуванням за пів години"))
+        assertEquals("Тарас", LocalCommands.parseName("клич мене Тарас"))
         assertEquals(LocalCommand.ENGLISH_PROGRESS, LocalCommands.match("як мій прогрес в англійській?"))
         assertEquals(LocalCommand.ENGLISH_LEVEL, LocalCommands.match("мій рівень англійської — середній"))
         assertEquals(LocalCommand.ENGLISH_LEVEL, LocalCommands.match("постав рівень англійської малюк"))
