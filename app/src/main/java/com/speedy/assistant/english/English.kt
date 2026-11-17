@@ -1,5 +1,7 @@
 package com.speedy.assistant.english
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -223,7 +225,7 @@ class EnglishProgress(private val file: File?) {
                     }))
             )
         }
-        f.writeText(json.toString())
+        f.writeTextAtomic(json.toString())
     }
 
     companion object {

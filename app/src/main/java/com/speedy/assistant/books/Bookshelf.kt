@@ -1,5 +1,7 @@
 package com.speedy.assistant.books
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONObject
 import java.io.File
 
@@ -97,7 +99,7 @@ class Bookshelf(
             books.put(path, JSONObject().put("chapter", p.chapter).put("sentence", p.sentence)
                 .put("chapters", p.chapters).put("title", p.title).put("finished", p.finished).put("translate", p.translate))
         }
-        f.writeText(JSONObject().put("books", books).put("last", JSONObject(lastOf as Map<*, *>)).toString())
+        f.writeTextAtomic(JSONObject().put("books", books).put("last", JSONObject(lastOf as Map<*, *>)).toString())
     }
 
     companion object {

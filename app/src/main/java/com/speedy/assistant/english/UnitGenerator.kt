@@ -1,5 +1,7 @@
 package com.speedy.assistant.english
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -31,7 +33,7 @@ class UnitStore(private val file: File?) {
     fun add(json: JSONObject, unit: Unit) {
         units += unit
         raw.put(json)
-        file?.writeText(raw.toString())
+        file?.writeTextAtomic(raw.toString())
     }
 }
 

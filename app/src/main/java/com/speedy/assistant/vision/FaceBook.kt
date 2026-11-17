@@ -1,5 +1,7 @@
 package com.speedy.assistant.vision
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -119,7 +121,7 @@ class FaceBook(private val file: File?) {
         people.forEach { (name, samples) ->
             json.put(name, JSONArray(samples.map { s -> JSONArray(s.map { it.toDouble() }) }))
         }
-        f.writeText(json.toString())
+        f.writeTextAtomic(json.toString())
     }
 
     companion object {

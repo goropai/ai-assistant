@@ -1,5 +1,7 @@
 package com.speedy.assistant.night
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -106,7 +108,7 @@ class NightLog(private val file: File?, private val zone: TimeZone = TimeZone.ge
 
     private fun save() {
         val f = file ?: return
-        f.writeText(
+        f.writeTextAtomic(
             JSONObject().put("started", startedAt).put("ended", endedAt).put("folder", folder).put("reported", reported)
                 .put("episodes", JSONArray(episodes.map { JSONArray().put(it.start).put(it.end) }))
                 .put("clips", JSONArray(clips)).toString()

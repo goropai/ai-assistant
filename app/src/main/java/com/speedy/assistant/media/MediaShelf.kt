@@ -1,5 +1,7 @@
 package com.speedy.assistant.media
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import com.speedy.assistant.books.Bookshelf
 import com.speedy.assistant.books.StorageScan
 import org.json.JSONObject
@@ -151,6 +153,6 @@ class MediaShelf(private val storage: StorageScan, private val progressFile: Fil
             items.put(key, JSONObject().put("track", p.track).put("position", p.positionMs)
                 .put("finished", p.finished).put("title", titles[key].orEmpty()))
         }
-        f.writeText(JSONObject().put("items", items).put("last", last.orEmpty()).toString())
+        f.writeTextAtomic(JSONObject().put("items", items).put("last", last.orEmpty()).toString())
     }
 }

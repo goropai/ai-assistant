@@ -1,5 +1,7 @@
 package com.speedy.assistant.initiative
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -52,7 +54,7 @@ class Reminders(private val file: File?) {
 
     private fun save() {
         val f = file ?: return
-        f.writeText(JSONArray(items.map { JSONObject().put("at", it.at).put("text", it.text).put("for", it.forName.orEmpty()) }).toString())
+        f.writeTextAtomic(JSONArray(items.map { JSONObject().put("at", it.at).put("text", it.text).put("for", it.forName.orEmpty()) }).toString())
     }
 }
 

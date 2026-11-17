@@ -1,5 +1,7 @@
 package com.speedy.assistant.brain
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONArray
 import java.io.File
 
@@ -33,7 +35,7 @@ class Memory(private val file: File?) {
         if (f.length < 3 || facts.any { it.equals(f, ignoreCase = true) }) return false
         facts += f
         while (facts.size > MAX_FACTS) facts.removeAt(0) // найстаріші забуваються
-        file?.writeText(JSONArray(facts).toString())
+        file?.writeTextAtomic(JSONArray(facts).toString())
         return true
     }
 

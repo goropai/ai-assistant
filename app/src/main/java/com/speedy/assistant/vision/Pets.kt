@@ -1,5 +1,7 @@
 package com.speedy.assistant.vision
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import android.graphics.Bitmap
 import android.graphics.Color
 import org.json.JSONArray
@@ -81,7 +83,7 @@ class Pets(private val file: File?) {
             arr.put(JSONObject().put("name", p.name).put("kind", p.kind.name)
                 .put("signature", JSONArray(p.signature.map { it.toDouble() })))
         }
-        f.writeText(arr.toString())
+        f.writeTextAtomic(arr.toString())
     }
 
     companion object {

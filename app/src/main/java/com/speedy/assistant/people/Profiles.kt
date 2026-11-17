@@ -1,5 +1,7 @@
 package com.speedy.assistant.people
 
+import com.speedy.assistant.util.writeTextAtomic
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -273,7 +275,7 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     .put("voiceCount", p.voiceCount)
             )
         }
-        f.writeText(json.toString())
+        f.writeTextAtomic(json.toString())
     }
 
     companion object {
