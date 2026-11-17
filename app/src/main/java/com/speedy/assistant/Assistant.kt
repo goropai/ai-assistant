@@ -842,13 +842,18 @@ class Assistant(
         lessonAnswer = answer
         ears.language = language
         face.setMood(Mood.LISTENING)
-        ears.start(listenNow = true)
-        val texts = kotlinx.coroutines.withTimeoutOrNull(LESSON_LISTEN_MS) { answer.await() }
-        lessonAnswer = null
-        ears.stop()
-        ears.language = "uk-UA"
-        delay(VoiceListener.UNMUTE_DELAY_MS) // звук ще приглушений після розпізнавача
-        return texts
+        try {
+            ears.start(listenNow = true)
+            val texts = kotlinx.coroutines.withTimeoutOrNull(LESSON_LISTEN_MS) { answer.await() }
+            ears.stop()
+            delay(VoiceListener.UNMUTE_DELAY_MS) // звук ще приглушений після розпізнавача
+            return texts
+        } finally {
+            // І коли урок перервали дотиком: інакше Спіді й далі чула б усе англійською
+            // (2026-11-17: Лінине «навчи мене англійської» розпізнавалось як «get home now»).
+            lessonAnswer = null
+            ears.language = "uk-UA"
+        }
     }
 
     /** @return false — не впоралась (хай відповідає модель). */
