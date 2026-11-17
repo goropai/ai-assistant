@@ -406,13 +406,14 @@ class Assistant(
             val kid = partner() ?: "дитина"
             if (childLimit.exhausted(kid, childLimitMinutes(), System.currentTimeMillis())) {
                 Log.i(TAG, "ліміт дитини ($kid) вичерпано")
+                childLimit.seen(kid, System.currentTimeMillis()) // поруч — 4 години до скидання рахуємо звідси
                 inConversation = false
                 runBusy {
                     face.setMood(Mood.SLEEPY)
                     say(listOf(
-                        "Ой, я так втомилася… Хочу трохи відпочити. Пограємо завтра!",
-                        "Мої батарейки втомилися, мені треба поспати. Побачимось завтра!",
-                        "Я вже дуже хочу відпочити. Давай завтра, добре?",
+                        "Ой, я так втомилася… Хочу трохи відпочити. Пограємо пізніше!",
+                        "Мої батарейки втомилися, мені треба поспати. Побачимось пізніше!",
+                        "Я вже дуже хочу відпочити. Давай трохи згодом, добре?",
                     ).random())
                 }
                 return

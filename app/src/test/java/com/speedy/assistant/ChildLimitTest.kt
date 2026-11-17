@@ -52,6 +52,30 @@ class ChildLimitTest {
     }
 
     @Test
+    fun resetsAfterFourHoursAway() {
+        var stored: String? = null
+        val limit = ChildLimit({ stored }, { stored = it }, utc)
+        limit.add("Ліна", 20 * 60_000L, at(16, 9))
+        limit.add("Даринка", 20 * 60_000L, at(16, 11))
+        assertTrue(limit.exhausted("Ліна", 15, at(16, 12, 59)))
+        // Ліни не було 4 години — ліміт знову повний; Даринки — лише 2 години.
+        assertFalse(limit.exhausted("Ліна", 15, at(16, 13)))
+        assertTrue(limit.exhausted("Даринка", 15, at(16, 13)))
+        // Переживає перезапуск застосунку.
+        assertFalse(ChildLimit({ stored }, { stored = it }, utc).exhausted("Даринка", 15, at(16, 15)))
+    }
+
+    @Test
+    fun askingAgainKeepsLimit() {
+        val limit = ChildLimit({ null }, {}, utc)
+        limit.add("Ліна", 20 * 60_000L, at(16, 9))
+        // Ліміт вичерпано, а Ліна просить ще о 12:00 — поруч; 4 години рахуємо від прохання.
+        limit.seen("Ліна", at(16, 12))
+        assertTrue(limit.exhausted("Ліна", 15, at(16, 15)))
+        assertFalse(limit.exhausted("Ліна", 15, at(16, 16)))
+    }
+
+    @Test
     fun pin() {
         val salt = Pin.newSalt()
         val h = Pin.hash("4821", salt)
