@@ -1,11 +1,14 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { CHANGE_PIN, FIND_PHONE, ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, ENGLISH_PLACEMENT, AGE_CHILD, AGE_ADULT, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { STOP_ALARM, SNOOZE_ALARM, CHANGE_PIN, FIND_PHONE, ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, ENGLISH_PLACEMENT, AGE_CHILD, AGE_ADULT, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
     private val stop = setOf("стоп", "стій", "зупинись", "зупинися", "stop")
+    // "вимкни будильник", "зупини таймер", "заглуши дзвінок"; "відклади будильник", "ще п'ять хвилин"
+    private val stopAlarm = Regex("^(?:вимкни|зупини|виключи|відключи|заглуши|прибери|вимикай)\\s+(?:будильник|таймер|сигнал|дзвінок|дзвоник)")
+    private val snoozeAlarm = Regex("^(?:відклади|відкласти|відкладай|перенеси)\\s+будильник|^ще\\s+(?:п.ять\\s+хвилин|трохи|хвилинку)$")
 
     // "перевір оновлення", "перевіри оновлення", "чи є оновлення", "є нова версія?"
     private val checkUpdate = Regex(
@@ -49,7 +52,7 @@ object LocalCommands {
 
     private val forgetMe = Regex("^забудь\\s+(мене|моє\\s+обличчя)")
     private val aboutMe = Regex("що\\s+ти\\s+(?:про\\s+мене\\s+)?(?:знаєш|пам.ятаєш)(?:\\s+про\\s+мене)?|розкажи\\s+(?:що\\s+)?(?:ти\\s+)?знаєш\\s+про\\s+мене")
-    private val whoAmI = Regex("^(хто\\s+я|ти\\s+мене\\s+знаєш|ти\\s+мене\\s+пам.ятаєш|як\\s+мене\\s+звати)")
+    private val whoAmI = Regex("^(хто\\s+я|ти\\s+(?:ж\\s+|що\\s+|не\\s+)?мене\\s+(?:не\\s+)?(?:знаєш|пам.ятаєш|впізнаєш)|як\\s+мене\\s+звати)")
     private val notNames = setOf(
         "не", "ні", "ніяк", "нічого", "неважливо", "секрет", "відстань", "стоп", "так", "що",
         // звичайні слова з коротких відповідей ("мене знаєш", "а ти") — не ім'я
@@ -147,6 +150,8 @@ object LocalCommands {
     fun match(command: String): LocalCommand? {
         val text = normalize(command)
         return when {
+            stopAlarm.containsMatchIn(text) -> LocalCommand.STOP_ALARM
+            snoozeAlarm.containsMatchIn(text) -> LocalCommand.SNOOZE_ALARM
             changePin.containsMatchIn(text) -> LocalCommand.CHANGE_PIN
             englishPlacement.containsMatchIn(text) -> LocalCommand.ENGLISH_PLACEMENT
             ageChild.matches(text) -> LocalCommand.AGE_CHILD

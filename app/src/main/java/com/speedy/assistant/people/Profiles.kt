@@ -60,9 +60,20 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
     @Synchronized
     fun names(): Set<String> = people.keys.toSet()
 
+    /** Когось знайомого бачила (чи говорила з ним) за останні [ms]. */
+    @Synchronized
+    fun anyoneSeenWithin(now: Long, ms: Long): Boolean = people.values.any { it.lastSeen > 0 && now - it.lastSeen <= ms }
+
     /** Скільки не було контакту перед цією появою; [Long.MAX_VALUE] — ще не бачила. */
     @Synchronized
-    fun returnGap(name: String): Long = people[name]?.returnGapMs ?: Long.MAX_VALUE
+    fun returnGap(name: String, now: Long): Long {
+        val p = people[name] ?: return Long.MAX_VALUE
+        if (p.lastSeen == 0L) return Long.MAX_VALUE
+        // Привітання могло спрацювати раніше, ніж камера зарахувала цю появу (seen): тоді перерва —
+        // від останнього контакту, а не попереднє (вже "використане") значення.
+        val sinceLast = now - p.lastSeen
+        return if (sinceLast > RETURN_MS) sinceLast else p.returnGapMs
+    }
 
     /** Привіталась (чи відгукнулась) — до наступної перерви знову "привіт" не казати. */
     @Synchronized
@@ -75,7 +86,8 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
     fun seen(name: String, now: Long) {
         val p = people.getOrPut(name) { Profile(firstSeen = now) }
         // Повернулась після перерви — запам'ятати, якої (на "привіт" — лише після довгої).
-        if (now - p.lastSeen > RETURN_MS) p.returnGapMs = if (p.lastSeen == 0L) Long.MAX_VALUE else now - p.lastSeen
+        // (і після перезапуску застосунку, коли перерву ще не рахували — з часу, що зберігся в профілі).
+        if (now - p.lastSeen > RETURN_MS || p.returnGapMs == Long.MAX_VALUE) p.returnGapMs = if (p.lastSeen == 0L) Long.MAX_VALUE else now - p.lastSeen
         if (now - p.lastSeen > VISIT_GAP_MS) {
             p.previousVisitEnd = p.lastSeen
             p.visits++
@@ -141,10 +153,26 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         val p = people[name] ?: return null
         val days = if (p.previousVisitEnd > 0) (now - p.previousVisitEnd) / DAY_MS else 0
         if (days >= 3) return "Давно не бачились!"
-        val today = p.clothing?.takeIf { dayOf(p.clothingAt) == dayOf(now) }
-        if (today != null && p.previousClothing != null && today != p.previousClothing) return "Ти сьогодні в ${today}!"
         return null
     }
+
+    /** Новий колір одягу сьогодні — раз на день (не на кожному привітанні). */
+    @Synchronized
+    fun clothingHint(name: String, now: Long): String? {
+        val p = people[name] ?: return null
+        val today = p.clothing?.takeIf { dayOf(p.clothingAt) == dayOf(now) } ?: return null
+        if (p.previousClothing == null || today == p.previousClothing || clothingSaid[name] == dayOf(now)) return null
+        return "Ти сьогодні в ${today}!"
+    }
+
+    /** Про одяг сказала — сьогодні більше ні. */
+    @Synchronized
+    fun clothingMentioned(name: String, now: Long) {
+        clothingSaid[name] = dayOf(now)
+    }
+
+    /** День, коли вже казала про одяг (не зберігаємо: після перезапуску — ще раз, не страшно). */
+    private val clothingSaid = HashMap<String, Int>()
 
     /** Замір положення очей (див. FaceObservation.eyeLevel); зберігаємо не частіше разу на хвилину. */
     @Synchronized

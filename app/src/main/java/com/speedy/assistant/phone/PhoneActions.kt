@@ -144,6 +144,22 @@ class PhoneActions(private val context: Context) {
         context.contentResolver.insert(CalendarContract.Events.CONTENT_URI, values) != null
     }
 
+    /**
+     * Вимкнути / відкласти будильник чи таймер, що дзвонить: кнопка з його сповіщення ("Відхилити",
+     * "Відкласти"); немає — стандартний запит до годинника (Android 6+). false — нічого не дзвонить.
+     */
+    fun stopAlarm(snooze: Boolean): Boolean {
+        NotificationStore.clockAlert?.notification?.actions?.let { actions ->
+            val wanted = if (snooze) Regex("(?i)відклад|повтор|дрімат|snooze|пізніше")
+            else Regex("(?i)відхил|закри|стоп|зупин|вимк|скасув|dismiss|stop|cancel|ок$")
+            actions.firstOrNull { wanted.containsMatchIn(it.title?.toString().orEmpty()) }?.let { a ->
+                return try { a.actionIntent.send(); NotificationStore.clockAlert = null; true } catch (e: Exception) { false }
+            }
+        }
+        val action = if (snooze) AlarmClock.ACTION_SNOOZE_ALARM else AlarmClock.ACTION_DISMISS_ALARM
+        return start(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
     private fun start(intent: Intent): Boolean = try {
         context.startActivity(intent)
         true

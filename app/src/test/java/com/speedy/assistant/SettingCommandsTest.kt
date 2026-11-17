@@ -39,4 +39,16 @@ class SettingCommandsTest {
         assertEquals(LocalCommand.WHERE, LocalCommands.match("де ми"))
         assertEquals(LocalCommand.WHERE, LocalCommands.match("де ти знаходишся"))
     }
+
+    @Test
+    fun alarmAndWhoAmI() {
+        assertEquals(LocalCommand.STOP_ALARM, LocalCommands.match("вимкни будильник"))
+        assertEquals(LocalCommand.STOP_ALARM, LocalCommands.match("зупини таймер"))
+        assertEquals(LocalCommand.SNOOZE_ALARM, LocalCommands.match("відклади будильник"))
+        assertEquals(LocalCommand.SNOOZE_ALARM, LocalCommands.match("ще п'ять хвилин"))
+        // "Ти ж мене знаєш" — "хто я", а не фраза для моделі (і не відповідь-ім'я).
+        assertEquals(LocalCommand.WHO_AM_I, LocalCommands.match("ти ж мене знаєш"))
+        assertEquals(LocalCommand.WHO_AM_I, LocalCommands.match("ти що мене не впізнаєш"))
+        assertNull(LocalCommands.parseName("ти ж мене знаєш", answer = true))
+    }
 }

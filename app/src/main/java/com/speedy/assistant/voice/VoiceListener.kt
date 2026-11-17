@@ -122,6 +122,9 @@ class VoiceListener(
      * Чи грає зараз будильник / таймер (STREAM_ALARM) чи дзвінок (STREAM_RING). Публічного способу
      * на Android 7 немає — AudioSystem.isStreamActive через рефлексію (до Android 9 дозволено).
      */
+    /** Дзвонить будильник / таймер / телефон (команди "вимкни будильник" — без "Спіді"). */
+    val ringing: Boolean get() = otherSoundRinging()
+
     private fun otherSoundRinging(): Boolean = try {
         val m = Class.forName("android.media.AudioSystem")
             .getMethod("isStreamActive", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
@@ -218,7 +221,9 @@ class VoiceListener(
                     lastPitchAt = SystemClock.uptimeMillis()
                     Log.d(TAG, "тон голосу: ${it.toInt()} Гц")
                 }
-                val ear = offline?.takeIf { offlineNow() }
+                // Дзвонить будильник — офлайн (Vosk не забирає аудіофокус, будильник не замовкне),
+                // щоб почути "вимкни будильник".
+                val ear = offline?.takeIf { offlineNow() || (it.ready && otherSoundRinging()) }
                 if (ear == null) {
                     handler.post { onVoiceDetected() }
                     break

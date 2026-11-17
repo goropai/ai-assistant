@@ -32,12 +32,26 @@ class SpeedyNotifications : NotificationListenerService() {
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        // Будильник / таймер дзвонить: його кнопки ("Відхилити", "Відкласти") — для "вимкни будильник".
+        if (isClockAlert(sbn)) NotificationStore.clockAlert = sbn
         toNote(sbn)?.let { NotificationStore.add(it, announce = true) }
     }
 
     /** Змахнули зі шторки — і з нашого списку. */
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
+        if (NotificationStore.clockAlert?.key == sbn.key) NotificationStore.clockAlert = null
         NotificationStore.remove(sbn.key)
+    }
+
+    /**
+     * Сповіщення будильника / таймера, що саме ДЗВОНИТЬ (повноекранне чи наполегливе), — не
+     * "наступний будильник о 7:00" (у того теж кнопка "Відхилити", і її натискати не можна).
+     */
+    private fun isClockAlert(sbn: StatusBarNotification): Boolean {
+        val n = sbn.notification ?: return false
+        if (n.actions.isNullOrEmpty()) return false
+        val ringing = n.fullScreenIntent != null || n.flags and Notification.FLAG_INSISTENT != 0
+        return ringing && (n.category == Notification.CATEGORY_ALARM || sbn.packageName.contains("clock", ignoreCase = true))
     }
 
     private fun toNote(sbn: StatusBarNotification): Note? {
@@ -63,6 +77,9 @@ class SpeedyNotifications : NotificationListenerService() {
 /** Список сповіщень із позначками "прочитано" (одна копія на процес Спіді). */
 object NotificationStore {
     val notes = NoteList()
+
+    /** Сповіщення будильника / таймера з кнопками (поки дзвонить) — щоб вимкнути голосом. */
+    @Volatile var clockAlert: android.service.notification.StatusBarNotification? = null
 
     /** Хто чекає на нові сповіщення (Спіді коротко повідомляє). */
     @Volatile var onNew: (() -> Unit)? = null

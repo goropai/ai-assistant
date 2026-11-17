@@ -165,6 +165,9 @@ class Assistant(
         }
     }
 
+    /** Відкладене "як тебе звати?" (скасовується, якщо обличчя впізнали). */
+    private var pendingStranger: Job? = null
+
     /** Скільки подій (нагадування, розряд) чекають паузи: читання книги поступається їм. */
     private var waitingForTurn = 0
 
@@ -219,9 +222,22 @@ class Assistant(
             ?.let { Log.i(TAG, "присутність: $it${if (busy) " (зайнята — пропускаю)" else ""}") }
         if (busy) return
         // Обличчя важливіші за загальне "хтось прийшов": вітаємо на ім'я або знайомимось.
-        events.firstOrNull { it is PresenceEvent.Recognized || it is PresenceEvent.Stranger }?.let { event ->
-            runBusy {
-                if (event is PresenceEvent.Recognized) greetKnown(event.name) else askName()
+        events.firstOrNull { it is PresenceEvent.Recognized }?.let { event ->
+            pendingStranger?.cancel() // упізнала — "як тебе звати?" вже не питаємо
+            runBusy { greetKnown((event as PresenceEvent.Recognized).name) }
+            return
+        }
+        if (events.any { it == PresenceEvent.Stranger }) {
+            // Здалеку чи збоку знайоме обличчя спершу схоже на чуже, а за кілька секунд упізнається.
+            // Тож питаємо ім'я не одразу; якщо когось знайомого бачили щойно — не питаємо зовсім.
+            if (profiles?.anyoneSeenWithin(System.currentTimeMillis(), RECENT_KNOWN_MS) == true) {
+                Log.i(TAG, "незнайоме обличчя, але знайомих бачила щойно — ім'я не питаю")
+                return
+            }
+            if (pendingStranger?.isActive != true) pendingStranger = scope.launch {
+                delay(STRANGER_WAIT_MS)
+                if (busy || people?.presentNames(SystemClock.uptimeMillis())?.isNotEmpty() == true) return@launch
+                runBusy { askName() }
             }
             return
         }
@@ -243,18 +259,43 @@ class Assistant(
         chirps.play(Chirp.HAPPY)
         val morning = profiles?.takeMorningBriefing(name, System.currentTimeMillis()) == true
         // "Привіт" — лише після довгої перерви; щойно бачились — інакше, без привітання й підказок.
-        val longAway = (profiles?.returnGap(name) ?: Long.MAX_VALUE) >= GREET_AGAIN_MS
+        val longAway = (profiles?.returnGap(name, System.currentTimeMillis()) ?: Long.MAX_VALUE) >= GREET_AGAIN_MS
         profiles?.greeted(name)
         if (!morning && !longAway) {
             say(listOf("О, $name, ти знову тут!", "З поверненням, $name!", "$name, я тебе бачу!", "А ось і $name!").random())
         } else {
-            val hint = profiles?.greetingHint(name, System.currentTimeMillis())?.let { " $it" }.orEmpty()
+            val hint = greetingExtra(name)?.let { " $it" }.orEmpty()
             say((if (morning) "Доброго ранку, $name!" else listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random()) + hint)
         }
         if (morning) morningBriefing()
         if (morning) reportNight(onlyNew = true)
         face.setMood(Mood.LISTENING)
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
+    }
+
+    /**
+     * Що додати до привітання (щоразу інше): давно не бачились; нагадування на сьогодні; недочитана
+     * книга; новий колір одягу (раз на день); побажання за часом доби.
+     */
+    private fun greetingExtra(name: String): String? {
+        val now = System.currentTimeMillis()
+        profiles?.greetingHint(name, now)?.let { return it } // "давно не бачились" — найважливіше
+        val endOfDay = java.util.Calendar.getInstance().apply { set(java.util.Calendar.HOUR_OF_DAY, 23); set(java.util.Calendar.MINUTE, 59) }.timeInMillis
+        reminders?.upcoming()?.firstOrNull { (it.forName == null || it.forName == name) && it.at <= endOfDay }
+            ?.let { return "До речі, ${whenText(it.at)} — ${it.text}." }
+        val options = mutableListOf<String>()
+        books?.last(name)?.takeIf { books.place(it)?.finished == false }?.let { options += "Продовжимо «${books.title(it)}»?" }
+        profiles?.clothingHint(name, now)?.let { options += it }
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        options += when (hour) {
+            in 5..11 -> listOf("Як спалось?", "Гарного ранку!")
+            in 12..16 -> listOf("Як минає день?", "Що цікавого сьогодні?")
+            in 17..21 -> listOf("Як пройшов день?", "Гарного вечора!")
+            else -> listOf("Чого не спиш?")
+        }.random()
+        val pick = options.random()
+        if (pick.startsWith("Ти сьогодні в")) profiles?.clothingMentioned(name, now)
+        return pick
     }
 
     private suspend fun askName() {
@@ -427,6 +468,10 @@ class Assistant(
                 return
             }
         }
+        // У відповідь прозвучало не ім'я ("ти ж мене знаєш") — розмова пішла далі; інакше наступне
+        // слово ("працюю" на "як твій день?") ставало іменем.
+        awaitingName = false
+        awaitingPetName = false
         if (awaitingBook && inWindow && WakeWord.extractCommand(candidates) == null) {
             val phrase = candidates.firstOrNull()?.takeIf { it.isNotBlank() }
             if (phrase != null) {
@@ -448,6 +493,8 @@ class Assistant(
         val named = WakeWord.extractCommand(candidates)
         val command = named
             ?: candidates.firstOrNull()?.takeIf { inWindow }
+            // Дзвонить будильник — "вимкни будильник" / "стоп" і без "Спіді".
+            ?: candidates.firstOrNull()?.takeIf { ears.ringing && LocalCommands.match(it) in ALARM_COMMANDS }
             ?: return
         if (named != null && named.isNotEmpty()) buzzer?.touch() // почула звертання ("Спіді" без команди — у greet)
         awaitingCommandUntil = 0
@@ -472,7 +519,8 @@ class Assistant(
      */
     private suspend fun childTired(command: String): Boolean {
         val limit = childLimit ?: return false
-        if (!childSpeaking() || LocalCommands.match(command) == LocalCommand.STOP) return false
+        // "Стоп" і "вимкни будильник" — завжди, навіть коли ліміт вичерпано.
+        if (!childSpeaking() || LocalCommands.match(command) in ALARM_COMMANDS) return false
         val kid = partner() ?: "дитина"
         val now = System.currentTimeMillis()
         if (!limit.exhausted(kid, childLimitMinutes(), now)) {
@@ -583,6 +631,8 @@ class Assistant(
         val cmd = LocalCommands.match(command)
         when (cmd) {
             LocalCommand.STOP -> {
+                // "Стоп", поки дзвонить будильник, — це про будильник.
+                if (ears.ringing && phone?.stopAlarm(snooze = false) == true) return say("Вимкнула.")
                 robot.stop()
                 playback?.pause()
                 face.setMood(Mood.NEUTRAL)
@@ -590,6 +640,15 @@ class Assistant(
                 return
             }
             LocalCommand.FIND_ROBOT -> return findPlatform()
+            LocalCommand.STOP_ALARM, LocalCommand.SNOOZE_ALARM -> {
+                val snooze = cmd == LocalCommand.SNOOZE_ALARM
+                // Лише коли справді дзвонить: інакше годинник відкрився б зі списком, а "наступний
+                // будильник" міг би вимкнутися.
+                if (!ears.ringing) return say("Зараз нічого не дзвонить.")
+                if (phone?.stopAlarm(snooze) != true) return say("Не вийшло вимкнути — натисни на екрані.")
+                face.setMood(Mood.HAPPY)
+                return say(if (snooze) "Відклала будильник." else "Вимкнула.")
+            }
             LocalCommand.FIND_PHONE -> {
                 // "Де ти?" — знайти телефон: вібрація й звук тричі.
                 face.setMood(Mood.HAPPY)
@@ -2035,6 +2094,11 @@ class Assistant(
         const val MAX_LISTED = 6
         /** "Я Ліна" діє стільки після останньої такої репліки. */
         const val CLAIM_MS = 3 * 60_000L
+        /** Незнайоме обличчя — питати ім'я лише якщо за стільки не впізнала. */
+        const val STRANGER_WAIT_MS = 8_000L
+        val ALARM_COMMANDS = setOf(LocalCommand.STOP_ALARM, LocalCommand.SNOOZE_ALARM, LocalCommand.STOP)
+        /** Знайомих бачила недавно — незнайоме обличчя, мабуть, той самий під іншим кутом. */
+        const val RECENT_KNOWN_MS = 5 * 60_000L
         /** "Привіт" знову — лише якщо не було контакту довше. */
         const val GREET_AGAIN_MS = 3 * 3600_000L
         /** Відбиток голосу діє для фрази й відповіді на неї. */
