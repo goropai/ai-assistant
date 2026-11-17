@@ -80,6 +80,15 @@
                 android:resource="@xml/accessibility_hands" />
         </service>
 
+        <!-- Після оновлення — одразу назад на екран (інакше виглядає як падіння) -->
+        <receiver
+            android:name=".update.RestartAfterUpdate"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <!-- Віддає завантажений APK системному інсталятору (file:// заборонено з Android 7) -->
         <provider
             android:name="androidx.core.content.FileProvider"
