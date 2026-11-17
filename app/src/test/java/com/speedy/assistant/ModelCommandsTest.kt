@@ -1,0 +1,62 @@
+package com.speedy.assistant
+
+import com.speedy.assistant.books.BookCommands
+import com.speedy.assistant.media.MediaCommands
+import com.speedy.assistant.night.NightCommands
+import com.speedy.assistant.phone.EventParser
+import com.speedy.assistant.phone.PhoneCommand
+import com.speedy.assistant.phone.PhoneCommands
+import com.speedy.assistant.translate.TranslateCommands
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Кожна форма з опису дії "command" для моделі (Brain) має розбиратися тим самим ланцюжком, що й
+ * у Assistant.runModelCommand, — інакше модель скаже команду "за інструкцією", а Спіді не зрозуміє.
+ */
+class ModelCommandsTest {
+    private val allowedLocal = setOf(
+        LocalCommand.ENGLISH_LESSON, LocalCommand.ENGLISH_PROGRESS, LocalCommand.REMIND, LocalCommand.LIST_REMINDERS,
+        LocalCommand.TIME, LocalCommand.WEATHER, LocalCommand.WHERE, LocalCommand.BATTERY,
+    )
+
+    private fun understood(command: String): Boolean {
+        LocalCommands.match(command)?.let { return it in allowedLocal }
+        if (EventParser.parse(command, System.currentTimeMillis()) != null) return true
+        if (NightCommands.parse(command) != null) return true
+        if (TranslateCommands.parse(command) != null) return true
+        if (MediaCommands.parse(command) != null) return true
+        if (BookCommands.parse(command) != null) return true
+        return when (PhoneCommands.parse(command)) {
+            is PhoneCommand.TodayCalendar, is PhoneCommand.Alarm, is PhoneCommand.Timer, is PhoneCommand.Call -> true
+            else -> false
+        }
+    }
+
+    @Test
+    fun everyDocumentedFormIsUnderstood() {
+        listOf(
+            "почитай книгу Кобзар", "почитай книгу Clean Code українською", "продовж читати", "які в тебе є книги",
+            "яку книгу ми читаємо", "читай з початку", "з початку розділу", "наступний розділ", "попередній розділ",
+            "читай українською", "читай в оригіналі",
+            "увімкни фільм Дюна", "увімкни мультик Шрек", "увімкни аудіокнигу Кобзар", "увімкни музику Океан Ельзи",
+            "продовж дивитись", "продовж аудіокнигу", "наступна серія", "пауза", "які є фільми", "які є аудіокниги",
+            "урок англійської", "мій прогрес в англійській",
+            "нагадай о 18:00 подзвонити мамі", "нагадай через 30 хвилин вимкнути духовку", "які в мене нагадування",
+            "постав будильник на 07:00", "постав таймер на 5 хвилин", "постав таймер на 30 секунд", "котра година",
+            "що в мене сьогодні в календарі", "запиши в календар лікаря у п'ятницю о 10:00",
+            "подзвони мамі",
+            "переклади на англійську я люблю каву", "переклади на російську добрий день",
+            "яка погода", "яка погода завтра", "яка погода у Львові", "де ми", "скільки в тебе заряду",
+            "послухай уночі чи я хроплю", "чи я хропів", "увімкни запис хропіння",
+        ).forEach { assertTrue("модель скаже «$it», а Спіді не зрозуміє", understood(it)) }
+    }
+
+    @Test
+    fun forbiddenStayForbidden() {
+        // Налаштування, PIN, знайомства, оновлення — моделі ні.
+        listOf("зміни пін-код", "мене звати Тарас", "забудь мене", "оновись", "це дитина").forEach {
+            assertTrue("«$it» не має виконуватися від моделі", !understood(it))
+        }
+    }
+}

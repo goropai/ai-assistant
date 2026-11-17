@@ -848,8 +848,13 @@ class Assistant(
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return true }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return true }
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return true }
-        val phoneCmd = com.speedy.assistant.phone.PhoneCommands.parse(command)
-        if (phoneCmd is com.speedy.assistant.phone.PhoneCommand.TodayCalendar) return handlePhone(phoneCmd)
+        // Телефон: календар, будильник, таймер, дзвінок (лише номеронабирач — "Виклик" тисне людина).
+        // Без відкриття застосунків і номерів телефонів уголос.
+        when (val phoneCmd = com.speedy.assistant.phone.PhoneCommands.parse(command)) {
+            is com.speedy.assistant.phone.PhoneCommand.TodayCalendar, is com.speedy.assistant.phone.PhoneCommand.Alarm,
+            is com.speedy.assistant.phone.PhoneCommand.Timer, is com.speedy.assistant.phone.PhoneCommand.Call -> return handlePhone(phoneCmd)
+            else -> {}
+        }
         return false
     }
 
