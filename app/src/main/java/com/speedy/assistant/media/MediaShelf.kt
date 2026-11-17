@@ -117,7 +117,11 @@ class MediaShelf(private val storage: StorageScan, private val progressFile: Fil
         }
     }
 
-    private fun pick(query: String, items: List<MediaItem>, minScore: Double): MediaItem? {
+    /** Спершу теки (аудіокнига, серіал цілком): файл "01.mp3" у теці з цією назвою збігається так само. */
+    private fun pick(query: String, items: List<MediaItem>, minScore: Double): MediaItem? =
+        pickFrom(query, items.filter { it.tracks.size > 1 }, minScore) ?: pickFrom(query, items, minScore)
+
+    private fun pickFrom(query: String, items: List<MediaItem>, minScore: Double): MediaItem? {
         val byFile = items.associateBy { File(it.key) }
         val best = Bookshelf.best(query, byFile.keys.toList(), minScore) { byFile[it]?.title.orEmpty() } ?: return null
         return byFile[best]

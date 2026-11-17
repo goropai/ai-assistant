@@ -23,14 +23,19 @@ class MediaPlayback(
     private val vlc: Vlc,
     private val shelf: MediaShelf,
     private val onEvent: (MediaEvent) -> Unit,
+    /** Тривалість файлу, мс (0 — не відомо): VLC для файлів через content:// її в сесії не дає. */
+    private val durationOf: (java.io.File) -> Long = { 0L },
     private val now: () -> Long = SystemClock::elapsedRealtime,
 ) {
     private var item: MediaItem? = null
     private var track = 0
     private var startedAt = 0L
     private var pendingSeek = 0L
-    /** Тривалість нашого файлу за медіасесією: інша — у VLC увімкнули щось своє, не стежимо. */
+    /** Тривалість нашого файлу; 0 — VLC ще не заграв його. */
     private var duration = 0L
+    /** Тривалість за медіасесією (якщо VLC її дає): інша — у VLC увімкнули щось своє, не стежимо. */
+    private var sessionDuration = 0L
+    private var fileDuration = 0L
     private var lastPosition = 0L
     private var pausedByUs = false
 
@@ -56,6 +61,7 @@ class MediaPlayback(
             vlc.playVideo(file, if (item.tracks.size > 1) "${item.title} — ${track + 1}" else item.title, place.positionMs)
         } else {
             pendingSeek = place.positionMs
+            fileDuration = durationOf(file)
             vlc.playAudio(file)
         }
     }
@@ -93,22 +99,33 @@ class MediaPlayback(
         val state = session?.playbackState
         val length = session?.metadata?.getLong(android.media.MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         if (session == null || state == null) {
-            // VLC закрили (або немає доступу) — довше хвилини без сесії: більше не стежимо.
+            // Дограв файл — VLC деактивує сесію (getActiveSessions її вже не віддає): це кінець файлу.
+            if (duration > 0) return stopped(current)
+            // Ще не заграв (або закрили, немає доступу) — довше хвилини без сесії: більше не стежимо.
             if (now() - startedAt > LOST_MS) item = null
             return
         }
         if (duration == 0L) {
             // Наш файл — той, що заграв першим після запуску. Доти сесія може показувати ще
             // попередній файл і "зупинено" — чекаємо (не довше хвилини).
-            if (length <= 0 || state.state != PlaybackState.STATE_PLAYING) {
-                if (now() - startedAt > LOST_MS) item = null
+            val known = fileDuration.takeIf { it > 0 } ?: length
+            if (known <= 0 || state.state != PlaybackState.STATE_PLAYING) {
+                if (now() - startedAt > LOST_MS) {
+                    Log.i(TAG, "VLC не заграв файл ${track + 1} — не стежу")
+                    item = null
+                }
                 return
             }
-            duration = length
-        } else if (length > 0 && kotlin.math.abs(length - duration) > 1_000) {
-            Log.i(TAG, "у VLC інший запис — не стежу")
-            item = null
-            return
+            duration = known
+            sessionDuration = length.coerceAtLeast(0)
+            Log.i(TAG, "грає файл ${track + 1}/${current.tracks.size}, ${duration / 1000} с")
+        } else if (length > 0) {
+            if (sessionDuration == 0L) sessionDuration = length
+            else if (kotlin.math.abs(length - sessionDuration) > 1_000) {
+                Log.i(TAG, "у VLC інший запис — не стежу")
+                item = null
+                return
+            }
         }
         val playing = state.state == PlaybackState.STATE_PLAYING
         val position = state.position + if (playing) ((SystemClock.elapsedRealtime() - state.lastPositionUpdateTime) * state.playbackSpeed).toLong() else 0L
@@ -123,24 +140,32 @@ class MediaPlayback(
                 lastPosition = position.coerceIn(0, duration)
                 shelf.save(current, MediaPlace(track, lastPosition))
             }
-            PlaybackState.STATE_STOPPED, PlaybackState.STATE_NONE -> {
-                if (lastPosition < duration - END_MS) {
-                    item = null // зупинили вручну — місце вже збережене
-                    return
-                }
-                if (track + 1 < current.tracks.size) {
-                    track++
-                    startedAt = now()
-                    duration = 0
-                    lastPosition = 0
-                    shelf.save(current, MediaPlace(track, 0))
-                    vlc.playAudio(current.tracks[track])
-                } else {
-                    item = null
-                    shelf.save(current, MediaPlace(0, 0, finished = true))
-                    onEvent(MediaEvent.Finished(current))
-                }
-            }
+            PlaybackState.STATE_STOPPED, PlaybackState.STATE_NONE -> stopped(current)
+        }
+    }
+
+    /** Файл зупинився: біля кінця — наступний (або кінець запису), інакше — зупинили вручну. */
+    private fun stopped(current: MediaItem) {
+        if (lastPosition < duration - END_MS) {
+            Log.i(TAG, "зупинили на ${lastPosition / 1000} с — місце збережене")
+            item = null
+            return
+        }
+        if (track + 1 < current.tracks.size) {
+            track++
+            startedAt = now()
+            duration = 0
+            sessionDuration = 0
+            lastPosition = 0
+            fileDuration = durationOf(current.tracks[track])
+            shelf.save(current, MediaPlace(track, 0))
+            Log.i(TAG, "наступний файл ${track + 1}/${current.tracks.size}")
+            vlc.playAudio(current.tracks[track])
+        } else {
+            Log.i(TAG, "дослухали: ${current.title}")
+            item = null
+            shelf.save(current, MediaPlace(0, 0, finished = true))
+            onEvent(MediaEvent.Finished(current))
         }
     }
 

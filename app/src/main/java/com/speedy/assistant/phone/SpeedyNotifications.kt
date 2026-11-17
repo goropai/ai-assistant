@@ -45,6 +45,8 @@ class SpeedyNotifications : NotificationListenerService() {
         val n = sbn.notification ?: return null
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return null // підсумок групи — дубль
         val extras = n.extras ?: return null
+        // Плеєр (VLC на паузі — сповіщення вже не "ongoing"): це не повідомлення, не озвучуємо.
+        if (n.category == Notification.CATEGORY_TRANSPORT || extras.containsKey(Notification.EXTRA_MEDIA_SESSION)) return null
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         val text = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT) ?: extras.getCharSequence(Notification.EXTRA_TEXT))
             ?.toString().orEmpty()

@@ -347,7 +347,18 @@ class MainActivity : AppCompatActivity() {
             notesListener = android.content.ComponentName(this, com.speedy.assistant.phone.SpeedyNotifications::class.java))
     }
     private val playback: com.speedy.assistant.media.MediaPlayback by lazy {
-        com.speedy.assistant.media.MediaPlayback(vlc, mediaShelf, onEvent = { assistant?.onMediaEvent(it) })
+        com.speedy.assistant.media.MediaPlayback(vlc, mediaShelf, onEvent = { assistant?.onMediaEvent(it) },
+            durationOf = { file ->
+                val r = android.media.MediaMetadataRetriever()
+                try {
+                    r.setDataSource(file.path)
+                    r.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                } catch (e: Exception) {
+                    0L
+                } finally {
+                    r.release()
+                }
+            })
     }
 
     /** Плеєр відео VLC закрився: позиція й тривалість — щоб продовжити з того місця. */

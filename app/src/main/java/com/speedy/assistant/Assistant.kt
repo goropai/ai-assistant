@@ -1077,7 +1077,8 @@ class Assistant(
                     is com.speedy.assistant.media.MediaEvent.Stopped -> {
                         val min = event.positionMs / 60_000
                         face.setMood(Mood.HAPPY)
-                        say("Запам'ятала, де ми зупинились: ${min} ${com.speedy.assistant.english.EnglishLesson.plural(min.toInt(), "хвилина", "хвилини", "хвилин")}. Скажи «продовж дивитись», щоб дивитись далі.")
+                        val at = if (min > 0) ": $min ${com.speedy.assistant.english.EnglishLesson.plural(min.toInt(), "хвилина", "хвилини", "хвилин")}" else ""
+                        say("Запам'ятала, де ми зупинились$at. Скажи «продовж дивитись», щоб дивитись далі.")
                     }
                     is com.speedy.assistant.media.MediaEvent.NextReady -> {
                         face.setMood(Mood.HAPPY)
