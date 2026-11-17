@@ -282,7 +282,7 @@ class Assistant(
             say(if (knownBefore) "$name! Тепер я впізнаватиму тебе краще." else "Приємно познайомитись, $name! Я тебе запам'ятала.")
         } else if (introduced is People.Introduction.LooksLike) {
             face.setMood(Mood.THINKING)
-            say("Ти дуже схожий на ${introduced.name}. Якщо я помиляюсь, скажи: «це не ${introduced.name}, це $name».")
+            say("Мені здається, ти — ${introduced.name}. Якщо я помиляюсь, скажи: «це не ${introduced.name}, це $name».")
         } else if (introduced == People.Introduction.Unclear) {
             face.setMood(Mood.THINKING)
             if (++unclearIntroductions > 1) {
@@ -396,7 +396,8 @@ class Assistant(
         val nearContinuation = people?.someoneClose(now) == true && now - lastInteraction < NEAR_CONTINUATION_MS
         val inWindow = now < awaitingCommandUntil || nearContinuation
         if (awaitingPetName && inWindow && WakeWord.extractCommand(candidates) == null) {
-            val name = candidates.firstNotNullOfOrNull { LocalCommands.parsePetName(it) ?: LocalCommands.parseName(it, answer = true) }
+            // Лише перший (найімовірніший) варіант: з "так, у мене сіра футболка" інші варіанти дають "футболка".
+            val name = candidates.firstOrNull()?.let { LocalCommands.parsePetName(it) ?: LocalCommands.parseName(it, answer = true) }
             if (name != null) {
                 awaitingCommandUntil = 0
                 awaitingPetName = false
@@ -407,7 +408,8 @@ class Assistant(
         // "Будь ласка, навчи мене англійської" у відповідь на "як тебе звати?" — команда, а не ім'я.
         if (awaitingName && candidates.any { LocalCommands.match(it) != null }) awaitingName = false
         if (awaitingName && inWindow && WakeWord.extractCommand(candidates) == null) {
-            val name = candidates.firstNotNullOfOrNull { LocalCommands.parseName(it, answer = true) }
+            // Лише перший варіант: інакше короткий запасний варіант речення ставав іменем ("Футболка").
+            val name = candidates.firstOrNull()?.let { LocalCommands.parseName(it, answer = true) }
             if (name != null) {
                 awaitingCommandUntil = 0
                 lastInteraction = SystemClock.uptimeMillis()
@@ -532,7 +534,12 @@ class Assistant(
                 face.setMood(Mood.SAD)
                 if (e is LlmException || e is java.io.IOException) chirps.play(Chirp.NO_NETWORK)
                 if (e is MissingKeyException) say("Мені потрібен ключ API. Довго натисни на екран, щоб відкрити налаштування.")
-                else say(if (e is LlmException || e is java.io.IOException) "Ой, не можу зв'язатися зі своїм мозком. Перевір інтернет." else "Ой, щось пішло не так.")
+                // Інтернет є, а модель не відповідає (перевантаження в Google чи Anthropic) — так і кажемо.
+                else say(when {
+                    (e is LlmException || e is java.io.IOException) && isOnline() -> "Мій мозок зараз не відповідає. Спробуй трохи згодом."
+                    e is LlmException || e is java.io.IOException -> "Ой, не можу зв'язатися зі своїм мозком. Перевір інтернет."
+                    else -> "Ой, щось пішло не так."
+                })
             } finally {
                 face.setSpeaking(false)
                 busy = false
