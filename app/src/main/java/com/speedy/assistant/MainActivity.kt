@@ -176,8 +176,8 @@ class MainActivity : AppCompatActivity() {
                 scene = { presence?.scene.orEmpty() },
                 about = {
                     // Довідка — про того, хто говорить (найближче обличчя), а не про будь-кого в кадрі.
-                    people.speaker(android.os.SystemClock.uptimeMillis())
-                        ?.let { profiles.summary(it, System.currentTimeMillis()) }.orEmpty()
+                    // Дитина говорить, а поруч дорослий — довідка про дитину (або ні про кого), не про дорослого.
+                    assistant?.speakerName()?.let { profiles.summary(it, System.currentTimeMillis()) }.orEmpty()
                 },
                 child = { assistant?.childSpeaking() == true },
             ),

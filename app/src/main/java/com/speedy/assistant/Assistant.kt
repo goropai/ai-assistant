@@ -1389,7 +1389,20 @@ class Assistant(
     private fun notesCount(n: Int) = "У тебе $n ${com.speedy.assistant.english.EnglishLesson.plural(n, "нове повідомлення", "нові повідомлення", "нових повідомлень")}"
 
     /** Хто зараз співрозмовник: одна знайома людина в кадрі (інакше — не знаємо напевно). */
-    private fun partner(): String? = people?.speaker(SystemClock.uptimeMillis())
+    private fun partner(): String? {
+        val now = SystemClock.uptimeMillis()
+        val closest = people?.speaker(now) ?: return null
+        // Говорить дитина (тон голосу), а найближче — дорослий (тримає телефон, сидить поруч):
+        // співрозмовник — дитина в кадрі, якщо її впізнали, інакше не знаємо. Не приписуємо дорослому
+        // (і дитячий ліміт не обходиться).
+        if (voiceSaysChild() == true && profiles?.age(closest) == com.speedy.assistant.people.Profiles.Age.ADULT) {
+            return people.presentNames(now).firstOrNull { profiles.age(it) == com.speedy.assistant.people.Profiles.Age.CHILD }
+        }
+        return closest
+    }
+
+    /** Хто зараз говорить зі Спіді (для довідки моделі про співрозмовника). */
+    fun speakerName(): String? = partner()
 
     /** Факт — у профіль співрозмовника, а якщо його не знаємо — у загальну пам'ять. */
     private fun rememberFact(fact: String) {

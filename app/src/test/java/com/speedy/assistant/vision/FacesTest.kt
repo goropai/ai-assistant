@@ -3,6 +3,7 @@ package com.speedy.assistant.vision
 import com.speedy.assistant.LocalCommand
 import com.speedy.assistant.LocalCommands
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -156,6 +157,18 @@ class FacesTest {
         val dad = FaceObservation(adultAgain, 0.2f, eyeLevel = 0.41f)
         people.update(3000, listOf(dad))
         assertEquals(listOf("Тарас"), people.presentNames(3000))
+    }
+
+    @Test
+    fun childRecognizedWithEyesAsHighAsAdult() {
+        // Справжні заміри 2026-11-17: Ліна 0.407–0.437 (ракурс), Тарас 0.39–0.42 — Ліну впізнаємо.
+        val people = People(FaceBook(null).apply { remember("Ліна", listOf(child)) }, ageOf = { if (it == "Ліна") "CHILD" else "UNKNOWN" })
+        val kid = FaceObservation(child, 0.15f, eyeLevel = 0.41f)
+        people.update(0, listOf(kid))
+        people.update(1500, listOf(kid))
+        assertEquals(listOf("Ліна"), people.presentNames(1500))
+        // Явно дорослі пропорції (очі високо) — не дитячий профіль.
+        assertFalse(People.ageFits("CHILD", 0.35f))
     }
 
         @Test
