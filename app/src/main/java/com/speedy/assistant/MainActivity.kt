@@ -224,6 +224,9 @@ class MainActivity : AppCompatActivity() {
             playback = playback,
             vlc = vlc,
             translator = com.speedy.assistant.translate.MlKitTranslator(),
+            night = nightWatch,
+            nightLog = nightLog,
+            onNight = { on -> runOnUiThread { setNightMode(on) } },
             hasFileAccess = ::hasFileAccess,
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar,
@@ -399,12 +402,36 @@ class MainActivity : AppCompatActivity() {
     private var profilesRef: com.speedy.assistant.people.Profiles? = null
     private var peopleRef: People? = null
 
+    private val nightLog by lazy { com.speedy.assistant.night.NightLog(java.io.File(filesDir, "night.json")) }
+    private val nightWatch by lazy {
+        com.speedy.assistant.night.NightWatch(
+            this, nightLog,
+            // Записи хропіння — у теці застосунку на картці пам'яті (Android/data/…/files/snoring).
+            root = getExternalFilesDir("snoring") ?: java.io.File(filesDir, "snoring"),
+            onFinished = { runOnUiThread { assistant?.nightFinished() } },
+        )
+    }
+    private var nightMode = false
+
+    /** Нічний режим: екран майже згаслий, камера вимкнена (слухаємо лише хропіння). */
+    private fun setNightMode(on: Boolean) {
+        nightMode = on
+        window.attributes = window.attributes.apply {
+            screenBrightness = when {
+                on -> 0.01f
+                BuildConfig.SCREEN_BRIGHTNESS >= 0f -> BuildConfig.SCREEN_BRIGHTNESS
+                else -> WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+        }
+        updatePresence()
+    }
+
     /** Камера для присутності — лише коли Спіді вільна, екран активний і батарея не сідає. */
     private fun updatePresence() {
         val watcher = presence ?: return
         val cameraAllowed = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
-        if (settings.presenceEnabled && cameraAllowed && resumed && !assistantBusy && !lowPower) watcher.start()
+        if (settings.presenceEnabled && cameraAllowed && resumed && !assistantBusy && !lowPower && !nightMode) watcher.start()
         else watcher.stop()
     }
 

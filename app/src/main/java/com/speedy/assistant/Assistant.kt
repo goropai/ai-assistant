@@ -87,6 +87,11 @@ class Assistant(
     private val vlc: com.speedy.assistant.media.Vlc? = null,
     /** Переклад uk/ru/en (книги й фрази). */
     private val translator: com.speedy.assistant.translate.Translator? = null,
+    /** Нічний режим: слухати хропіння до ранку. */
+    private val night: com.speedy.assistant.night.NightWatch? = null,
+    private val nightLog: com.speedy.assistant.night.NightLog? = null,
+    /** Увімкнули / вимкнули нічний режим — приглушити екран, вимкнути камеру. */
+    private val onNight: (Boolean) -> Unit = {},
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -108,7 +113,7 @@ class Assistant(
 
     fun start() {
         // Поки VLC грає аудіокнигу чи музику, мікрофон не слухає (там теж говорять) — лише дотик.
-        if (!busy && playback?.playingAudio != true) ears.start()
+        if (!busy && micFree()) ears.start()
         scheduleIdle()
     }
 
@@ -125,7 +130,7 @@ class Assistant(
             ears.stop()
         } else if (!playing && mutedForMedia) {
             mutedForMedia = false
-            ears.start()
+            if (micFree()) ears.start()
         }
     }
 
@@ -173,7 +178,7 @@ class Assistant(
 
     /** Раз на хвилину: чи не хочеться чогось (на зарядку, уваги). */
     fun checkDesires(hour: Int, someoneNear: Boolean, batteryPercent: Int, charging: Boolean) {
-        if (busy) return
+        if (busy || night?.active == true) return
         val wish = desires.check(SystemClock.uptimeMillis(), hour, someoneNear, lastInteraction, batteryPercent, charging)
             ?: return
         chirp(wish, if (wish == Chirp.LOW_BATTERY) Mood.SLEEPY else Mood.HAPPY)
@@ -229,6 +234,7 @@ class Assistant(
         val morning = profiles?.takeMorningBriefing(name, System.currentTimeMillis()) == true
         say((if (morning) "Доброго ранку, $name!" else listOf("Привіт, $name!", "О, $name! Привіт!", "$name, рада тебе бачити!").random()) + hint)
         if (morning) morningBriefing()
+        if (morning) reportNight(onlyNew = true)
         face.setMood(Mood.LISTENING)
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
     }
@@ -352,6 +358,8 @@ class Assistant(
      */
     fun manualWake() {
         if (busy) return interrupt()
+        // Нічний режим — дотик його вимикає (мікрофон зайнятий, голосом не вимкнути).
+        if (night?.active == true) return runBusy { stopNight() }
         // Грає аудіо у VLC — пауза, і Спіді слухає ("продовжуй" — грає далі).
         if (playback?.pause() == true) mutedForMedia = false
         runBusy { greet() }
@@ -481,7 +489,7 @@ class Assistant(
                 // Спитала й чекає відповіді — слухаємо одразу, щоб не обрізати початок фрази.
                 // Увімкнула аудіо у VLC — не слухаємо (mediaTick увімкне слух, коли замовкне).
                 if (playback?.playingAudio == true) mutedForMedia = true
-                else ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
+                else if (night?.active != true) ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
                 scheduleIdle()
             }
         }
@@ -652,6 +660,8 @@ class Assistant(
                 }
             }
         }
+        // Нічний режим (хропіння) — без моделі.
+        com.speedy.assistant.night.NightCommands.parse(command)?.let { return handleNight(it) }
         // Переклад фраз і книг — без моделі (офлайн).
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return }
         // Фільми й аудіокниги у VLC — без моделі ("увімкни Дюну" без такого файлу — далі).
@@ -1004,6 +1014,66 @@ class Assistant(
                 )
             }
         }
+    }
+
+    /** Мікрофон вільний для слуху: не грає аудіо у VLC і не слухаємо хропіння. */
+    private fun micFree() = playback?.playingAudio != true && night?.active != true
+
+    private suspend fun handleNight(cmd: com.speedy.assistant.night.NightCommand) {
+        val watch = night ?: return say("Я поки не вмію слухати вночі.")
+        Log.i(TAG, "ніч: $cmd")
+        when (cmd) {
+            is com.speedy.assistant.night.NightCommand.Start -> {
+                val now = System.currentTimeMillis()
+                val until = com.speedy.assistant.night.NightCommands.nextTime(cmd.untilHour ?: DEFAULT_WAKE_HOUR, now)
+                val hour = java.util.Calendar.getInstance().apply { timeInMillis = until }.get(java.util.Calendar.HOUR_OF_DAY)
+                face.setMood(Mood.HAPPY)
+                say("Добре, слухатиму до $hour:00. Записуватиму лише тоді, коли хтось хропе, і нікуди цього не відправлятиму. Щоб вимкнути — торкнись мене. На добраніч!")
+                inConversation = false
+                awaitingCommandUntil = 0
+                ears.stop()
+                delay(VoiceListener.UNMUTE_DELAY_MS) // розпізнавач має відпустити мікрофон
+                watch.start(scope, until)
+                onNight(true)
+                face.setMood(Mood.SLEEPY)
+            }
+            com.speedy.assistant.night.NightCommand.Report -> reportNight(onlyNew = false)
+            com.speedy.assistant.night.NightCommand.Play -> {
+                val clips = nightLog?.clips().orEmpty().map(::File).filter { it.exists() }
+                if (clips.isEmpty()) return say(if (nightLog?.listened == true) "Записів хропіння немає." else "Я ще не слухала вночі. Скажи «послухай уночі, чи я хроплю».")
+                val folder = clips.first().parentFile ?: return
+                val item = com.speedy.assistant.media.MediaItem(folder.path, "Хропіння ${folder.name}", com.speedy.assistant.media.MediaKind.AUDIO, clips)
+                startMedia(item)
+            }
+        }
+    }
+
+    /** Вимкнути нічний режим дотиком і коротко сказати, що чула. */
+    private suspend fun stopNight() {
+        night?.stop()
+        onNight(false)
+        face.setMood(Mood.HAPPY)
+        say("Добре, більше не слухаю.")
+        reportNight(onlyNew = false)
+    }
+
+    /** Ніч скінчилась сама (ранок) — звичайний режим; підсумок — коли привітаємось чи спитають. */
+    fun nightFinished() {
+        onNight(false)
+        face.setMood(Mood.NEUTRAL)
+        if (!busy && micFree()) ears.start()
+    }
+
+    /** Підсумок ночі; [onlyNew] — лише якщо ще не казали (ранкове привітання). */
+    private suspend fun reportNight(onlyNew: Boolean) {
+        val log = nightLog ?: return
+        if (onlyNew && (log.reported || !log.listened || night?.active == true)) return
+        // Ранкове привітання — лише про щойно минулу ніч, а не тижневої давності.
+        if (onlyNew && System.currentTimeMillis() - log.startedAt > 18 * 3600_000L) return
+        val text = log.summary() ?: return say("Я ще не слухала вночі. Скажи «послухай уночі, чи я хроплю».")
+        log.markReported()
+        face.setMood(Mood.HAPPY)
+        say(text)
     }
 
     /** @return false — це не про медіа (хай далі вирішують книги / модель). */
@@ -1388,7 +1458,7 @@ class Assistant(
     fun announceNotes() {
         val now = SystemClock.uptimeMillis()
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        if (busy || now - lastNoteAnnounced < 60_000 || hour < 8 || hour >= 22) return
+        if (busy || night?.active == true || now - lastNoteAnnounced < 60_000 || hour < 8 || hour >= 22) return
         val fresh = com.speedy.assistant.phone.NotificationStore.notes.unread()
             .filterNot { com.speedy.assistant.phone.Safety.blocked("", it.app) }
         if (fresh.isEmpty()) return
@@ -1710,7 +1780,7 @@ class Assistant(
             val listening = (awaitingCommandUntil - SystemClock.uptimeMillis()).coerceAtLeast(0)
             delay(if (face.mood == Mood.LISTENING) maxOf(listening, 1_000) else 5_000)
             inConversation = false
-            face.setMood(Mood.NEUTRAL)
+            face.setMood(if (night?.active == true) Mood.SLEEPY else Mood.NEUTRAL)
             delay(SLEEP_AFTER_MS)
             face.setMood(Mood.SLEEPY)
         }
@@ -1732,6 +1802,8 @@ class Assistant(
         /** Просте "продовжуй" — про книгу, якщо читали протягом цього часу. */
         const val BARE_CONTINUE_MS = 30 * 60_000L
         const val MAX_LISTED = 6
+        /** Нічний режим — до цієї години, якщо не сказали інакше. */
+        const val DEFAULT_WAKE_HOUR = 7
         const val BOOK_FORMATS = "EPUB, FB2, PDF чи TXT"
     }
 }
