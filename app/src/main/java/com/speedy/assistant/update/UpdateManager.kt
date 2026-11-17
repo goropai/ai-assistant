@@ -45,6 +45,17 @@ class UpdateManager(
 
     private val dir: File get() = File(context.cacheDir, "updates")
 
+    /**
+     * Завантажені APK, чия версія вже встановлена (оновились) чи старша, — видалити (~45 МБ кожен).
+     * Раніше лежали до наступного завантаження. Викликати при запуску.
+     */
+    fun cleanup() {
+        dir.listFiles()?.filter { f ->
+            val code = Regex("speedy-(\\d+)\\.apk").matchEntire(f.name)?.groupValues?.get(1)?.toIntOrNull()
+            code == null || code <= currentVersionCode
+        }?.forEach { f -> if (f.delete()) android.util.Log.i("UpdateManager", "видалено завантаження ${f.name}") }
+    }
+
     /** @return інформацію про новішу версію або null, якщо встановлена найновіша. */
     suspend fun check(): UpdateInfo? = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(manifestUrl).header("Cache-Control", "no-cache").build()

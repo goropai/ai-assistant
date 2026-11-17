@@ -189,6 +189,7 @@ class Assistant(
 
     /** Тиха перевірка після запуску: говоримо лише тоді, коли знайшлася нова версія. */
     fun checkUpdatesOnLaunch() {
+        scope.launch(Dispatchers.IO) { updater.cleanup() } // APK уже встановленої версії — геть
         if (!updater.isConfigured) return
         scope.launch {
             delay(LAUNCH_CHECK_DELAY_MS)
