@@ -54,6 +54,8 @@ class MainActivity : AppCompatActivity() {
     private var charging = false
     private var networkLost = false
     private val settings by lazy { AppSettings(this) }
+    /** База Спіді: люди (обличчя, голоси, профілі) і тварини. */
+    private val db by lazy { com.speedy.assistant.data.SpeedyDb(this) }
     private val robot by lazy {
         // Короткі таймаути: якщо плата зникла, рух не має "висіти" 15 секунд.
         val robotHttp = http.newBuilder()
@@ -156,11 +158,13 @@ class MainActivity : AppCompatActivity() {
         if (assistant != null) return
         val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
         speaker = voice
-        val profiles = com.speedy.assistant.people.Profiles(java.io.File(filesDir, "profiles.json"))
-        val people = People(FaceBook(java.io.File(filesDir, "faces.json")), ageOf = { profiles.age(it).name })
+        // Люди й тварини — у базі; перший запуск після оновлення переносить старі JSON (лишаються *.migrated).
+        db.importJson(java.io.File(filesDir, "faces.json"), java.io.File(filesDir, "profiles.json"), java.io.File(filesDir, "pets.json"))
+        val profiles = com.speedy.assistant.people.Profiles(db)
+        val people = People(FaceBook(db), ageOf = { profiles.age(it).name })
         profilesRef = profiles
         peopleRef = people
-        val pets = com.speedy.assistant.vision.Pets(java.io.File(filesDir, "pets.json"))
+        val pets = com.speedy.assistant.vision.Pets(db)
         // PDFBox бере шрифти й таблиці гліфів із ресурсів застосунку (для тексту PDF-книг).
         com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
         presence = PresenceWatcher(this, this, people, pets, profiles) { events -> assistant?.onPresence(events) }

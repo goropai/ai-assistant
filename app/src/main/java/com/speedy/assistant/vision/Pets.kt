@@ -1,11 +1,11 @@
 package com.speedy.assistant.vision
 
-import com.speedy.assistant.util.writeTextAtomic
+import com.speedy.assistant.data.JsonPetFile
+import com.speedy.assistant.data.PetRecord
+import com.speedy.assistant.data.PetStore
 
 import android.graphics.Bitmap
 import android.graphics.Color
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 
 /**
@@ -14,7 +14,9 @@ import java.io.File
  * йому; кількох котів розрізняємо, якщо вони різного кольору. Усе — лише на телефоні.
  * Спільна для потоку камери й головного потоку, тож методи синхронізовані.
  */
-class Pets(private val file: File?) {
+class Pets(private val store: PetStore?) {
+    /** JSON-файл (тести, старі дані). */
+    constructor(file: File) : this(JsonPetFile(file))
     data class Pet(val name: String, val kind: Kind, val signature: FloatArray)
 
     private val pets = mutableListOf<Pet>()
@@ -62,28 +64,13 @@ class Pets(private val file: File?) {
     fun recentKind(now: Long): Kind? = recent?.takeIf { now - it.third <= RECENT_MS }?.first
 
     private fun load() {
-        val f = file?.takeIf { it.exists() } ?: return
-        try {
-            val arr = JSONArray(f.readText())
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val sig = o.getJSONArray("signature")
-                pets += Pet(o.getString("name"), Kind.valueOf(o.getString("kind")),
-                    FloatArray(sig.length()) { sig.getDouble(it).toFloat() })
-            }
-        } catch (e: Exception) {
-            pets.clear()
+        store?.loadPets()?.forEach { r ->
+            runCatching { Kind.valueOf(r.kind) }.getOrNull()?.let { pets += Pet(r.name, it, r.signature) }
         }
     }
 
     private fun save() {
-        val f = file ?: return
-        val arr = JSONArray()
-        pets.forEach { p ->
-            arr.put(JSONObject().put("name", p.name).put("kind", p.kind.name)
-                .put("signature", JSONArray(p.signature.map { it.toDouble() })))
-        }
-        f.writeTextAtomic(arr.toString())
+        store?.savePets(pets.map { PetRecord(it.name, it.kind.name, it.signature) })
     }
 
     companion object {

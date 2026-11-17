@@ -1,21 +1,24 @@
 package com.speedy.assistant.vision
 
-import com.speedy.assistant.util.writeTextAtomic
-
-import org.json.JSONArray
-import org.json.JSONObject
+import com.speedy.assistant.data.FaceStore
+import com.speedy.assistant.data.JsonVectorFile
 import java.io.File
 import kotlin.math.sqrt
 
 /**
  * Знайомі обличчя: ім'я → кілька "відбитків" (embedding MobileFaceNet, L2-нормовані).
- * Зберігаються лише на телефоні (files/faces.json), нікуди не надсилаються.
+ * Зберігаються лише на телефоні (база Спіді; у тестах — JSON), нікуди не надсилаються.
  */
-class FaceBook(private val file: File?) {
+class FaceBook(private val store: FaceStore?) {
+    /** JSON-файл (тести, старі дані). */
+    constructor(file: File) : this(JsonVectorFile(file))
+
     private val people = LinkedHashMap<String, MutableList<FloatArray>>()
+    /** Змінені з останнього збереження (зберігаємо лише їх). */
+    private val dirty = mutableSetOf<String>()
 
     init {
-        load()
+        store?.loadFaces()?.forEach { (name, v) -> people[name] = v.toMutableList() }
     }
 
     val names: Set<String> get() = people.keys
@@ -63,6 +66,7 @@ class FaceBook(private val file: File?) {
         val samples = people.getOrPut(name) { mutableListOf() }
         samples += embeddings.map { normalize(it) }
         while (samples.size > MAX_SAMPLES) samples.removeAt(0)
+        dirty += name
         save()
     }
 
@@ -72,6 +76,7 @@ class FaceBook(private val file: File?) {
         val target = people.getOrPut(new) { mutableListOf() }
         target += samples
         while (target.size > MAX_SAMPLES) target.removeAt(0)
+        dirty += old; dirty += new
         save()
         return true
     }
@@ -87,41 +92,25 @@ class FaceBook(private val file: File?) {
         for ((other, samples) in people.entries.toList()) {
             if (other == name) continue
             val moved = samples.filter { s -> current.any { cosine(it, s) >= SAME_PERSON } }
+            if (moved.isEmpty()) continue
             samples.removeAll(moved)
             target += moved
             if (samples.isEmpty()) people.remove(other)
+            dirty += other
         }
         target += current.map { normalize(it) }
         while (target.size > MAX_SAMPLES) target.removeAt(0)
+        dirty += name
         save()
     }
 
-    fun forget(name: String): Boolean = (people.remove(name) != null).also { if (it) save() }
+    fun forget(name: String): Boolean = (people.remove(name) != null).also { if (it) { dirty += name; save() } }
 
-    private fun load() {
-        val f = file ?: return
-        if (!f.exists()) return
-        try {
-            val json = JSONObject(f.readText())
-            for (name in json.keys()) {
-                val arr = json.getJSONArray(name)
-                people[name] = MutableList(arr.length()) { i ->
-                    val v = arr.getJSONArray(i)
-                    FloatArray(v.length()) { v.getDouble(it).toFloat() }
-                }
-            }
-        } catch (e: Exception) {
-            people.clear() // зіпсований файл — краще забути, ніж впасти
-        }
-    }
-
+    /** Змінене — у сховище (порожній список — видалити); одна транзакція. */
     private fun save() {
-        val f = file ?: return
-        val json = JSONObject()
-        people.forEach { (name, samples) ->
-            json.put(name, JSONArray(samples.map { s -> JSONArray(s.map { it.toDouble() }) }))
-        }
-        f.writeTextAtomic(json.toString())
+        if (dirty.isEmpty()) return
+        store?.saveFaces(dirty.associateWith { people[it]?.toList().orEmpty() })
+        dirty.clear()
     }
 
     companion object {

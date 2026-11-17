@@ -1,6 +1,7 @@
 package com.speedy.assistant.people
 
-import com.speedy.assistant.util.writeTextAtomic
+import com.speedy.assistant.data.JsonProfileFile
+import com.speedy.assistant.data.ProfileStore
 
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,7 +14,9 @@ import java.util.TimeZone
  * поруч), одяг (колір верху за камерою). Збирається здебільшого без моделі; моделі
  * дістається лише коротка довідка про співрозмовника. Лише на телефоні (files/profiles.json).
  */
-class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.getDefault()) {
+class Profiles(private val store: ProfileStore?, private val zone: TimeZone = TimeZone.getDefault()) {
+    /** JSON-файл (тести, старі дані). */
+    constructor(file: File, zone: TimeZone = TimeZone.getDefault()) : this(JsonProfileFile(file), zone)
 
     class Profile(
         val facts: MutableList<String> = mutableListOf(),
@@ -44,6 +47,8 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
     enum class Age { CHILD, ADULT, UNKNOWN }
 
     private val people = LinkedHashMap<String, Profile>()
+    /** Видалені / перейменовані з останнього збереження — прибрати й зі сховища. */
+    private val removed = mutableSetOf<String>()
 
     init {
         load()
@@ -188,6 +193,7 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
     @Synchronized
     fun rename(old: String, new: String) {
         val from = people.remove(old) ?: return
+        removed += old
         val to = people[new]
         if (to == null) {
             people[new] = from
@@ -202,7 +208,7 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
 
     @Synchronized
     fun forget(name: String) {
-        if (people.remove(name) != null) save()
+        if (people.remove(name) != null) { removed += name; save() }
     }
 
     private fun habit(p: Profile): String? {
@@ -222,11 +228,9 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
     private fun dayOf(t: Long) = Calendar.getInstance(zone).apply { timeInMillis = t }.let { it.get(Calendar.YEAR) * 400 + it.get(Calendar.DAY_OF_YEAR) }
 
     private fun load() {
-        val f = file?.takeIf { it.exists() } ?: return
+        val all = store?.loadProfiles() ?: return
         try {
-            val json = JSONObject(f.readText())
-            for (name in json.keys()) {
-                val o = json.getJSONObject(name)
+            for ((name, o) in all) {
                 val facts = o.optJSONArray("facts") ?: JSONArray()
                 val hours = o.optJSONArray("hours") ?: JSONArray()
                 people[name] = Profile(
@@ -253,10 +257,12 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
     }
 
     private fun save() {
-        val f = file ?: return
-        val json = JSONObject()
+        val s = store ?: return
+        val changed = LinkedHashMap<String, JSONObject?>()
+        removed.forEach { changed[it] = null }
+        removed.clear()
         people.forEach { (name, p) ->
-            json.put(
+            changed.put(
                 name, JSONObject()
                     .put("facts", JSONArray(p.facts))
                     .put("hours", JSONArray(p.hours.toList()))
@@ -275,7 +281,7 @@ class Profiles(private val file: File?, private val zone: TimeZone = TimeZone.ge
                     .put("voiceCount", p.voiceCount)
             )
         }
-        f.writeTextAtomic(json.toString())
+        s.saveProfiles(changed)
     }
 
     companion object {
