@@ -97,6 +97,13 @@ object SettingsDialog {
             tag = Runnable { refresh() }
         }
         form.addView(usage)
+        // Налаштування вже відкрито за PIN — новий одразу (двічі; можна й голосом).
+        form.addView(android.widget.Button(context).apply {
+            text = "Змінити PIN"
+            setOnClickListener {
+                PinDialog.setup(context, settings, title = "Новий PIN", message = "Новий 4-значний PIN батьків.", cancelable = true) {}
+            }
+        })
 
         AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
             .setTitle("Спіді ${BuildConfig.VERSION_NAME}")

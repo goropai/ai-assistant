@@ -9,8 +9,33 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 
-/** PIN батьків: задати при першому запуску, перевірити перед налаштуваннями. */
+/**
+ * PIN батьків: задати при першому запуску, перевірити перед налаштуваннями, змінити. Поки віконце
+ * відкрите, PIN можна сказати вголос ("два нуль чотири сім") — Спіді впише його сама.
+ */
 object PinDialog {
+
+    /** Поки відкрите віконце PIN — фраза з 4 цифрами йде сюди (а не в команди й не в журнал). */
+    @Volatile private var voiceInput: ((String) -> Unit)? = null
+
+    val awaitingVoice: Boolean get() = voiceInput != null
+
+    /** Почута фраза: PIN — вписати; true — фразу забрали (це PIN, не команда). */
+    fun hear(candidates: List<String>): Boolean {
+        val input = voiceInput ?: return false
+        val pin = candidates.firstNotNullOfOrNull { SpokenPin.parse(it) } ?: return false
+        input(pin)
+        return true
+    }
+
+    /**
+     * Голосовий вхід для цього віконця; закриваючись, воно прибирає лише свій вхід (наступне
+     * віконце — "новий PIN" — могло вже показатися раніше, ніж прийшло закриття попереднього).
+     */
+    private fun listen(dialog: AlertDialog, input: (String) -> Unit) {
+        voiceInput = input
+        dialog.setOnDismissListener { if (voiceInput === input) voiceInput = null }
+    }
 
     private fun pinField(context: Context, hint: String) = EditText(context).apply {
         this.hint = hint
@@ -20,37 +45,62 @@ object PinDialog {
         textSize = 24f
     }
 
-    /** Перший запуск: PIN двічі; без нього далі не йдемо. */
-    fun setup(context: Context, settings: AppSettings, onDone: () -> Unit) {
+    private fun voiceHint(context: Context) = TextView(context).apply {
+        text = "…або скажіть його вголос, по цифрі"
+        textSize = 13f
+        alpha = 0.7f
+        gravity = Gravity.CENTER
+    }
+
+    /** PIN двічі (перший запуск — без нього далі не йдемо; зміна — [cancelable]). */
+    fun setup(
+        context: Context, settings: AppSettings,
+        title: String = "PIN батьків",
+        message: String = "Придумайте 4-значний PIN для налаштувань Спіді (щоб дитина не змінювала їх).",
+        cancelable: Boolean = false,
+        onDone: () -> Unit,
+    ) {
         val pad = (16 * context.resources.displayMetrics.density).toInt()
         val first = pinField(context, "PIN")
         val second = pinField(context, "ще раз")
         val form = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad / 2, pad, 0)
-            addView(TextView(context).apply { text = "Придумайте 4-значний PIN для налаштувань Спіді (щоб дитина не змінювала їх)." })
+            addView(TextView(context).apply { text = message })
             addView(first)
             addView(second)
+            addView(voiceHint(context))
         }
-        val dialog = AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
-            .setTitle("PIN батьків")
+        val builder = AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
+            .setTitle(title)
             .setView(form)
-            .setCancelable(false)
+            .setCancelable(cancelable)
             .setPositiveButton("Зберегти", null)
-            .create()
+        if (cancelable) builder.setNegativeButton("Скасувати", null)
+        val dialog = builder.create()
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val save = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            save.setOnClickListener {
                 val a = first.text.toString()
                 val b = second.text.toString()
                 when {
                     !Pin.valid(a) -> Toast.makeText(context, "Потрібно 4 цифри", Toast.LENGTH_SHORT).show()
-                    a != b -> Toast.makeText(context, "PIN не збігається", Toast.LENGTH_SHORT).show()
+                    a != b -> {
+                        second.text.clear()
+                        Toast.makeText(context, "PIN не збігається", Toast.LENGTH_SHORT).show()
+                    }
                     else -> {
                         settings.setPin(a)
                         dialog.dismiss()
+                        Toast.makeText(context, "PIN збережено", Toast.LENGTH_SHORT).show()
                         onDone()
                     }
                 }
+            }
+            // Голосом: перший раз — у перше поле, другий — підтвердження й зберегти.
+            listen(dialog) { pin ->
+                if (!Pin.valid(first.text.toString())) first.setText(pin)
+                else { second.setText(pin); save.performClick() }
             }
         }
         dialog.show()
@@ -58,17 +108,23 @@ object PinDialog {
 
     /** Перевірка PIN перед захищеною дією; немає PIN — спершу задати. */
     fun require(context: Context, settings: AppSettings, onOk: () -> Unit) {
-        if (!settings.hasPin) return setup(context, settings, onOk)
+        if (!settings.hasPin) return setup(context, settings, onDone = onOk)
         val field = pinField(context, "PIN")
         val pad = (16 * context.resources.displayMetrics.density).toInt()
         val dialog = AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
             .setTitle("Введіть PIN")
-            .setView(LinearLayout(context).apply { setPadding(pad, pad / 2, pad, 0); addView(field) })
+            .setView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(pad, pad / 2, pad, 0)
+                addView(field)
+                addView(voiceHint(context))
+            })
             .setPositiveButton("OK", null)
             .setNegativeButton("Скасувати", null)
             .create()
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val ok = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            ok.setOnClickListener {
                 if (settings.checkPin(field.text.toString())) {
                     dialog.dismiss()
                     onOk()
@@ -77,7 +133,13 @@ object PinDialog {
                     Toast.makeText(context, "Неправильний PIN", Toast.LENGTH_SHORT).show()
                 }
             }
+            listen(dialog) { pin -> field.setText(pin); ok.performClick() }
         }
         dialog.show()
+    }
+
+    /** Змінити PIN: спершу поточний, потім новий двічі. */
+    fun change(context: Context, settings: AppSettings) = require(context, settings) {
+        setup(context, settings, title = "Новий PIN", message = "Новий 4-значний PIN батьків.", cancelable = true) {}
     }
 }

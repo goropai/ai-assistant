@@ -374,6 +374,8 @@ class Assistant(
     }
 
     private fun onHeard(candidates: List<String>) {
+        // Відкрите віконце PIN — сказаний PIN вписуємо туди (і далі як команду не обробляємо).
+        if (com.speedy.assistant.settings.PinDialog.hear(candidates)) return
         // Йде урок і Спіді чекає відповіді — це вона.
         lessonAnswer?.let { if (it.complete(candidates)) return }
         if (busy) return
@@ -451,6 +453,7 @@ class Assistant(
 
     /** Лише debug-збірка: фраза з adb так, ніби її почули (перевірка команд без голосу). */
     fun debugHear(text: String) {
+        if (com.speedy.assistant.settings.PinDialog.hear(listOf(text))) { Log.i(TAG, "debug: PIN у віконце"); return }
         Log.i(TAG, "debug: \"$text\"")
         if (busy) interrupt()
         scope.launch {
@@ -514,6 +517,11 @@ class Assistant(
                 return
             }
             LocalCommand.FIND_ROBOT -> return findPlatform()
+            LocalCommand.CHANGE_PIN -> {
+                face.setMood(Mood.THINKING)
+                say("Спершу введи або скажи поточний PIN, а потім — новий двічі.")
+                return openAccessSettings("pin")
+            }
             LocalCommand.ENGLISH_LESSON -> return englishLesson()
             LocalCommand.ENGLISH_PLACEMENT -> {
                 english?.progress?.resetLevel(partner() ?: "гість")

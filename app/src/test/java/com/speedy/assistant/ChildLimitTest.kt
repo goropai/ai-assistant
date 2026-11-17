@@ -76,6 +76,23 @@ class ChildLimitTest {
     }
 
     @Test
+    fun spokenPin() {
+        val p = com.speedy.assistant.settings.SpokenPin
+        assertEquals("2047", p.parse("2047"))
+        assertEquals("2047", p.parse("2 0 4 7"))
+        assertEquals("2047", p.parse("два нуль чотири сім"))
+        assertEquals("2047", p.parse("дві нуль чотири сім"))
+        assertEquals("0059", p.parse("мій пін 0 0 п'ять дев'ять"))
+        assertEquals("1234", p.parse("код 12 34"))
+        // Не PIN: інша кількість цифр, звичайна фраза з числом.
+        assertEquals(null, p.parse("123"))
+        assertEquals(null, p.parse("12345"))
+        assertEquals(null, p.parse("котра година 2047"))
+        assertEquals(com.speedy.assistant.LocalCommand.CHANGE_PIN, com.speedy.assistant.LocalCommands.match("Спіді, зміни пін-код".removePrefix("Спіді, ")))
+        assertEquals(com.speedy.assistant.LocalCommand.CHANGE_PIN, com.speedy.assistant.LocalCommands.match("постав новий пін"))
+    }
+
+    @Test
     fun pin() {
         val salt = Pin.newSalt()
         val h = Pin.hash("4821", salt)

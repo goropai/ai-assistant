@@ -84,6 +84,10 @@ class VoiceListener(
     private val unmute = Runnable { muteBeeps(false) }
     private val resumeGuard = Runnable { startGuard() }
 
+    /** У журнал — не PIN: поки відкрите віконце PIN, почуте не показуємо. */
+    private fun shown(phrases: List<String>): Any =
+        if (com.speedy.assistant.settings.PinDialog.awaitingVoice) "[приховано: вводять PIN]" else phrases
+
     fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
 
     /** @param listenNow одразу сеанс розпізнавання (Спіді щойно спитала і чекає відповіді). */
@@ -202,7 +206,7 @@ class VoiceListener(
                 else if (SystemClock.uptimeMillis() - started > MAX_UTTERANCE_MS) final = recognizer.finalResult
             }
             val phrases = final?.let { OfflineEar.phrases(it) }.orEmpty()
-            Log.d(TAG, "офлайн почула (${SystemClock.uptimeMillis() - started} мс): $phrases")
+            Log.d(TAG, "офлайн почула (${SystemClock.uptimeMillis() - started} мс): ${shown(phrases)}")
             if (phrases.isNotEmpty()) handler.post { if (active) onPhrase(phrases) }
         } catch (e: Exception) {
             Log.w(TAG, "offline recognition failed", e)
@@ -311,7 +315,7 @@ class VoiceListener(
             val phrases = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
             // Упевненість розпізнавача в першому варіанті — "вухо" для оцінки вимови.
             lastConfidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull()
-            Log.d(TAG, "heard: $phrases")
+            Log.d(TAG, "heard: ${shown(phrases)}")
             if (phrases.isNotEmpty()) sessionUntil = SystemClock.uptimeMillis() + SESSION_MS
             // onPhrase може викликати stop() — тоді перезапуску не буде.
             if (phrases.isNotEmpty()) onPhrase(phrases)

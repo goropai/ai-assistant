@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, ENGLISH_PLACEMENT, AGE_CHILD, AGE_ADULT, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { CHANGE_PIN, ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, ENGLISH_PLACEMENT, AGE_CHILD, AGE_ADULT, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -119,6 +119,8 @@ object LocalCommands {
     private val englishLevel = Regex("рівень\\s+(?:з\\s+)?англійськ")
 
     private val remind = Regex("^нагадай\\s")
+    // "зміни пін-код", "поміняй пін", "постав новий пін", "хочу змінити пароль"
+    private val changePin = Regex("(?:зміни|змінити|змініть|поміняй|поміняти|постав|встанови)\\s+(?:новий\\s+)?(?:пін|pin|пароль|код\\s+батьків)")
     private val listReminders = Regex("^(?:які|що)\\s+(?:в\\s+мене\\s+|у\\s+мене\\s+)?(?:є\\s+)?нагадуван\\p{L}*|^мої\\s+нагадуван\\p{L}*")
     private val cancelReminders = Regex("^(?:скасуй|видали|забудь|очисти)\\s+(?:всі\\s+|усі\\s+)?нагадуван\\p{L}*")
 
@@ -142,6 +144,7 @@ object LocalCommands {
     fun match(command: String): LocalCommand? {
         val text = normalize(command)
         return when {
+            changePin.containsMatchIn(text) -> LocalCommand.CHANGE_PIN
             englishPlacement.containsMatchIn(text) -> LocalCommand.ENGLISH_PLACEMENT
             ageChild.matches(text) -> LocalCommand.AGE_CHILD
             ageAdult.matches(text) -> LocalCommand.AGE_ADULT

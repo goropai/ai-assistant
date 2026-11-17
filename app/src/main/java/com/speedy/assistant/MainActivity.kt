@@ -203,8 +203,10 @@ class MainActivity : AppCompatActivity() {
                 startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
             },
             openAccessSettings = { which ->
+                // Зміна PIN: поточний (перевірка всередині), потім новий двічі.
+                if (which == "pin") com.speedy.assistant.settings.PinDialog.change(this, settings)
                 // Системні доступи — лише за PIN батьків.
-                com.speedy.assistant.settings.PinDialog.require(this, settings) {
+                else com.speedy.assistant.settings.PinDialog.require(this, settings) {
                     if (which == "files") return@require openFileAccess()
                     val action = if (which == "notes") "android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"
                     else android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS
