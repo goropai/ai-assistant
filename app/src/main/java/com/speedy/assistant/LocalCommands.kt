@@ -1,7 +1,7 @@
 package com.speedy.assistant
 
 /** Команди, які виконуються одразу, без звернення до LLM (і без витрати токенів). */
-enum class LocalCommand { CHANGE_PIN, ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, ENGLISH_PLACEMENT, AGE_CHILD, AGE_ADULT, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
+enum class LocalCommand { CHANGE_PIN, FIND_PHONE, ENGLISH_LESSON, ENGLISH_PROGRESS, ENGLISH_LEVEL, ENGLISH_PLACEMENT, AGE_CHILD, AGE_ADULT, END_CONVERSATION, REMIND, LIST_REMINDERS, CANCEL_REMINDERS, STOP, FIND_ROBOT, CHECK_UPDATE, INSTALL_UPDATE, TIME, BATTERY, INTRODUCE, FORGET_ME, FORGET_NAME, LIST_PEOPLE, WHO_AM_I, ABOUT_ME, WEATHER, WHERE, NAME_PET, CORRECT_NAME }
 
 object LocalCommands {
 
@@ -64,6 +64,8 @@ object LocalCommands {
     /** Ім'я з фрази знайомства ("мене звати Тарас") або з відповіді на "як тебе звати?" ("Тарас", "я Тарас"). */
     // "де ми", "де я", "де ти зараз", "де ми знаходимось"
     private val where = Regex("^де\\s+(ми|я|ти)(\\s+(зараз|знаходимо?ся|знаходишся|знаходимось))?$")
+    // "Де ти?", "де телефон?", "озвись" — знайти телефон (вібрація й звук), а не "де ми знаходимось".
+    private val findPhone = Regex("^(?:де\\s+ти|ти\\s+де|де\\s+(?:мій\\s+)?телефон|знайди\\s+(?:мій\\s+)?телефон|озвись|відгукнись|подай\\s+голос)$")
 
     // "кота звати Мурчик", "його звати Мурчик", "це наш кіт Мурчик", "назви кота Мурчик"
     private val namePet = Regex(
@@ -168,6 +170,7 @@ object LocalCommands {
             listPeople.containsMatchIn(text) -> LocalCommand.LIST_PEOPLE
             aboutMe.containsMatchIn(text) && "мене" in text -> LocalCommand.ABOUT_ME
             whoAmI.containsMatchIn(text) -> LocalCommand.WHO_AM_I
+            findPhone.matches(text) -> LocalCommand.FIND_PHONE
             where.containsMatchIn(text) -> LocalCommand.WHERE
             com.speedy.assistant.weather.WeatherText.isWeatherQuestion(text) -> LocalCommand.WEATHER
             time.containsMatchIn(text) -> LocalCommand.TIME

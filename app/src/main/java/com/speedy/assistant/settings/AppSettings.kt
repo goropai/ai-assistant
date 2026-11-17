@@ -49,6 +49,27 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("presence", true)
         set(value) = prefs.edit().putBoolean("presence", value).apply()
 
+    // --- вібрація (кожна — окремо) ---
+    /** Нагадування вночі / в нічному режимі — вібрацією замість голосу (скаже після дотику). */
+    var vibrateQuiet: Boolean
+        get() = prefs.getBoolean("vibrate_quiet", true)
+        set(value) = prefs.edit().putBoolean("vibrate_quiet", value).apply()
+
+    /** "Спіді, де ти?" — вібрація разом зі звуком. */
+    var vibrateFind: Boolean
+        get() = prefs.getBoolean("vibrate_find", true)
+        set(value) = prefs.edit().putBoolean("vibrate_find", value).apply()
+
+    /** Коротка вібрація на дотик і на звертання "Спіді". */
+    var vibrateTouch: Boolean
+        get() = prefs.getBoolean("vibrate_touch", true)
+        set(value) = prefs.edit().putBoolean("vibrate_touch", value).apply()
+
+    /** Легка вібрація на правильну відповідь в уроці. */
+    var vibrateCheer: Boolean
+        get() = prefs.getBoolean("vibrate_cheer", true)
+        set(value) = prefs.edit().putBoolean("vibrate_cheer", value).apply()
+
     // --- PIN батьків (лише хеш із сіллю) ---
     val hasPin: Boolean get() = prefs.getString("pin_hash", null) != null
 

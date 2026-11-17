@@ -15,6 +15,8 @@
     <!-- "Запиши в календар лікаря на п'ятницю о 10" -->
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Вібрація: нагадування в тиші, "де ти?", дотик, уроки (кожну можна вимкнути) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Самооновлення: потрібен на Android 8+, на 7.1 діє глобальне "Невідомі джерела" -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Книги вголос: шукаємо файли по всьому сховищу (Android 11+ — "доступ до всіх файлів") -->

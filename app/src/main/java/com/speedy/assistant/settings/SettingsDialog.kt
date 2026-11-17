@@ -75,6 +75,13 @@ object SettingsDialog {
         }
         form.addView(presence)
 
+        label("Вібрація")
+        fun vibe(text: String, on: Boolean) = CheckBox(context).apply { this.text = text; isChecked = on; form.addView(this) }
+        val vibeQuiet = vibe("нагадування вночі — вібрацією замість голосу", settings.vibrateQuiet)
+        val vibeFind = vibe("«Спіді, де ти?» — вібрація й звук", settings.vibrateFind)
+        val vibeTouch = vibe("на дотик і на звертання «Спіді»", settings.vibrateTouch)
+        val vibeCheer = vibe("на правильну відповідь в уроці", settings.vibrateCheer)
+
         label("Діти: хвилин розмови на день (0 — без обмеження)")
         val limit = field(settings.childLimitMinutes.toString(), "15").apply {
             inputType = InputType.TYPE_CLASS_NUMBER
@@ -116,6 +123,10 @@ object SettingsDialog {
                 settings.geminiModel = geminiModel.text.toString()
                 settings.robotUrl = robotUrl.text.toString()
                 settings.presenceEnabled = presence.isChecked
+                settings.vibrateQuiet = vibeQuiet.isChecked
+                settings.vibrateFind = vibeFind.isChecked
+                settings.vibrateTouch = vibeTouch.isChecked
+                settings.vibrateCheer = vibeCheer.isChecked
                 settings.childLimitMinutes = limit.text.toString().toIntOrNull() ?: settings.childLimitMinutes
                 family?.names?.zip(childBoxes)?.forEach { (name, box) -> family.setChild(name, box.isChecked) }
                 onSaved()

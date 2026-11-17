@@ -118,6 +118,18 @@ class VoiceListener(
         pending.clear()
     }
 
+    /**
+     * Чи грає зараз будильник / таймер (STREAM_ALARM) чи дзвінок (STREAM_RING). Публічного способу
+     * на Android 7 немає — AudioSystem.isStreamActive через рефлексію (до Android 9 дозволено).
+     */
+    private fun otherSoundRinging(): Boolean = try {
+        val m = Class.forName("android.media.AudioSystem")
+            .getMethod("isStreamActive", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+        listOf(AudioManager.STREAM_ALARM, AudioManager.STREAM_RING).any { m.invoke(null, it, 0) as Boolean }
+    } catch (e: Exception) {
+        false
+    }
+
     fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
 
     /** @param listenNow одразу сеанс розпізнавання (Спіді щойно спитала і чекає відповіді). */
@@ -262,6 +274,15 @@ class VoiceListener(
 
     private fun startSession() {
         if (!active) return
+        // Дзвонить будильник, таймер чи телефон: розпізнавач Google забирає ексклюзивний аудіофокус —
+        // і годинник замовкає. Поки дзвонить — не вмикаємо, перевіримо знову за кілька секунд.
+        if (otherSoundRinging()) {
+            Log.d(TAG, "дзвонить будильник / таймер / телефон — розпізнавання не вмикаю")
+            stopGuard()
+            handler.removeCallbacks(resumeGuard)
+            handler.postDelayed(resumeGuard, RINGING_RECHECK_MS)
+            return
+        }
         stopGuard()
         inSession = true
         sessionUntil = SystemClock.uptimeMillis() + SESSION_MS
@@ -411,6 +432,8 @@ class VoiceListener(
         /** Скільки кадрів мовлення дочитати після спрацювання вартового для оцінки тону. */
         private const val PITCH_EXTRA_FRAMES = 12
         private const val MAX_UTTERANCE_MS = 15_000L
+        /** Поки дзвонить будильник — перевіряти знову через стільки. */
+        private const val RINGING_RECHECK_MS = 4_000L
         /** Звуку фрази для відбитка голосу — не більше 8 с. */
         private const val MAX_AUDIO = RATE * 8
         /** Скільки слухати після останньої почутої мови, перш ніж повернутися до вартового. */

@@ -92,6 +92,13 @@ class Assistant(
     /** Відбиток голосу: модель мовця і знайомі голоси. */
     private val voicePrints: com.speedy.assistant.voice.VoicePrints? = null,
     private val voiceBook: com.speedy.assistant.voice.VoiceBook? = null,
+    /** Налаштування (зміни голосом — лише після PIN) і вібрація. */
+    private val settings: com.speedy.assistant.settings.AppSettings? = null,
+    private val buzzer: com.speedy.assistant.voice.Buzzer? = null,
+    /** Показати віконце PIN; після правильного — [onOk]. */
+    private val confirmWithPin: (onOk: () -> Unit) -> Unit = {},
+    /** Налаштування змінилися — оновити камеру, "мозок" тощо. */
+    private val onSettingsChanged: () -> Unit = {},
     private val nightLog: com.speedy.assistant.night.NightLog? = null,
     /** Увімкнули / вимкнули нічний режим — приглушити екран, вимкнути камеру. */
     private val onNight: (Boolean) -> Unit = {},
@@ -368,7 +375,10 @@ class Assistant(
      * думає) — негайна зупинка. Під час руху мікрофон вимкнено, тож це головний "стоп".
      */
     fun manualWake() {
+        buzzer?.touch()
         if (busy) return interrupt()
+        // Нагадування, що прийшли в тиші (лише вібрація), — тепер уголос.
+        if (quietReminders.isNotEmpty()) return runBusy { sayQuietReminders() }
         // Нічний режим — дотик його вимикає (мікрофон зайнятий, голосом не вимкнути).
         if (night?.active == true) return runBusy { stopNight() }
         // Грає аудіо у VLC — пауза, і Спіді слухає ("продовжуй" — грає далі).
@@ -435,9 +445,11 @@ class Assistant(
             awaitingBook = false
             inConversation = false
         }
-        val command = WakeWord.extractCommand(candidates)
+        val named = WakeWord.extractCommand(candidates)
+        val command = named
             ?: candidates.firstOrNull()?.takeIf { inWindow }
             ?: return
+        if (named != null && named.isNotEmpty()) buzzer?.touch() // почула звертання ("Спіді" без команди — у greet)
         awaitingCommandUntil = 0
         lastInteraction = SystemClock.uptimeMillis()
         inConversation = true
@@ -560,6 +572,7 @@ class Assistant(
 
     /** Звернулися без команди: коротке "бі-іп" замість слів — і чекаємо команду. */
     private suspend fun greet() {
+        buzzer?.touch()
         lastInteraction = SystemClock.uptimeMillis()
         face.setMood(Mood.LISTENING)
         chirps.play(Chirp.ACK)
@@ -577,6 +590,13 @@ class Assistant(
                 return
             }
             LocalCommand.FIND_ROBOT -> return findPlatform()
+            LocalCommand.FIND_PHONE -> {
+                // "Де ти?" — знайти телефон: вібрація й звук тричі.
+                face.setMood(Mood.HAPPY)
+                buzzer?.find()
+                repeat(3) { chirps.play(Chirp.ATTENTION); delay(300) }
+                return say("Я тут!")
+            }
             LocalCommand.CHANGE_PIN -> {
                 face.setMood(Mood.THINKING)
                 say("Спершу введи або скажи поточний PIN, а потім — новий двічі.")
@@ -730,6 +750,8 @@ class Assistant(
                 }
             }
         }
+        // Налаштування голосом — лише після PIN батьків ("вимкни вібрацію на дотик").
+        com.speedy.assistant.settings.SettingCommands.parse(command)?.let { return changeSetting(it) }
         // Подія в календар — без моделі ("запиши в календар лікаря на п'ятницю о 10").
         com.speedy.assistant.phone.EventParser.parse(command, System.currentTimeMillis())?.let { return addCalendarEvent(it) }
         // Нічний режим (хропіння) — без моделі.
@@ -898,6 +920,14 @@ class Assistant(
 
     /** Час нагадування настав — дочекатися паузи в розмові й сказати. */
     fun remind(r: com.speedy.assistant.initiative.Reminder, late: Boolean = false) {
+        // Тиша (ніч чи нічний режим) — лише вібрація; уголос — після дотику.
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        if (settings?.vibrateQuiet == true && (night?.active == true || hour < 8 || hour >= 22)) {
+            quietReminders += r
+            buzzer?.quietReminder()
+            Log.i(TAG, "нагадування в тиші — вібрація: ${r.text}")
+            return
+        }
         scope.launch {
             awaitTurn()
             runBusy {
@@ -949,7 +979,7 @@ class Assistant(
                 try { voice.speak(en, english = true) } finally { face.setSpeaking(false) }
             }
             override suspend fun listen(english: Boolean) = listenLesson(english)
-            override suspend fun cheer() { face.setMood(Mood.HAPPY); chirps.play(Chirp.HAPPY) }
+            override suspend fun cheer() { face.setMood(Mood.HAPPY); buzzer?.cheer(); chirps.play(Chirp.HAPPY) }
             override suspend fun oops() { face.setMood(Mood.THINKING) }
         }
         // Вік: профіль (сказане вголос / голос / явно дитяче обличчя), інакше — голос щойно почутої фрази.
@@ -1148,6 +1178,44 @@ class Assistant(
                 val time = if (e.allDay) ", на весь день" else " о " + java.text.SimpleDateFormat("H:mm", uk).format(java.util.Date(e.start))
                 face.setMood(Mood.HAPPY)
                 say("Записала в календар: ${e.title} — $day$time.")
+            }
+        }
+    }
+
+    /** Нагадування, що прийшли в тиші (лише вібрація) — скаже після дотику. */
+    private val quietReminders = mutableListOf<com.speedy.assistant.initiative.Reminder>()
+
+    private suspend fun sayQuietReminders() {
+        val list = quietReminders.toList()
+        quietReminders.clear()
+        face.setMood(Mood.SURPRISED)
+        for (r in list) {
+            val who = r.forName?.let { "$it, " }.orEmpty()
+            val at = java.text.SimpleDateFormat("H:mm", java.util.Locale("uk", "UA")).format(java.util.Date(r.at))
+            say("${who}нагадую (о $at): ${r.text}.")
+        }
+    }
+
+    /** Налаштування голосом: спершу PIN (пальцем чи голосом), потім змінити й підтвердити. */
+    private suspend fun changeSetting(cmd: com.speedy.assistant.settings.SettingCommand) {
+        val s = settings ?: return say("Я поки не вмію змінювати налаштування.")
+        Log.i(TAG, "налаштування: $cmd — чекаю PIN")
+        face.setMood(Mood.THINKING)
+        say("Щоб змінити налаштування, введи або скажи PIN.")
+        confirmWithPin {
+            scope.launch {
+                awaitTurn()
+                runBusy {
+                    val problem = com.speedy.assistant.settings.SettingCommands.apply(cmd, s)
+                    if (problem != null) {
+                        face.setMood(Mood.SAD)
+                        say(problem)
+                    } else {
+                        onSettingsChanged()
+                        face.setMood(Mood.HAPPY)
+                        say("Готово: ${com.speedy.assistant.settings.SettingCommands.describe(cmd)}.")
+                    }
+                }
             }
         }
     }
