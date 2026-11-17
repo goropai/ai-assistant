@@ -24,7 +24,7 @@ class CommandsTest {
         assertEquals("так, що ти бачиш", WakeWord.extractCommand(listOf("так, Спіді, що ти бачиш")))
         assertEquals("почитай книгу кобзар", WakeWord.extractCommand(listOf("почитай спіді книгу кобзар")))
         assertNull(WakeWord.extractCommand(listOf("купи спідниці і спідометр")))
-        // "Привіт, спить, я Міра…" — так Google чув "Привіт, Спіді"; "спить кіт" — ні.
+        // "Привіт, спить, я Ліна…" — так Google чув "Привіт, Спіді"; "спить кіт" — ні.
         assertEquals("Я Ліна А ти що робиш", WakeWord.extractCommand(listOf("Привіт спить Я Ліна А ти що робиш")))
     }
 
@@ -54,7 +54,7 @@ class CommandsTest {
             // Так дитячу фразу чув розпізнавач:
             "навчи мене англійської", "навчись будь ласка мене англійської", "навчиш будь ласка мене англійської",
             "будь ласка навчиш мене англійської", "Спіді, навчи мене, будь ласка, англійської!",
-            "можеш навчити мене англійської?", "повчи зі мною англійську",
+            "можеш навчити мене англійської?", "повчи зі мною англійську", "навчи Ліну англійської",
         ).forEach {
             assertEquals(it, LocalCommand.ENGLISH_LESSON, LocalCommands.match(it))
         }
@@ -114,5 +114,16 @@ class CommandsTest {
         listOf("оновлення погоди на завтра", "онови мені пам'ять про погоду").forEach {
             assertEquals(it, LocalCommand.WEATHER, LocalCommands.match(it))
         }
+    }
+
+    @Test
+    fun whileRingingFragmentsAreEnough() {
+        // Так Vosk розібрав "Спіді, вимкни будильник" під сигнал.
+        assertEquals(LocalCommand.STOP_ALARM, LocalCommands.whileRinging("спільне будник"))
+        assertEquals(LocalCommand.STOP_ALARM, LocalCommands.whileRinging("не буде"))
+        assertEquals(LocalCommand.STOP_ALARM, LocalCommands.whileRinging("стоп"))
+        assertEquals(LocalCommand.SNOOZE_ALARM, LocalCommands.whileRinging("спіді відклади будильник"))
+        assertNull(LocalCommands.whileRinging("співробітник"))
+        assertNull(LocalCommands.whileRinging("як справи"))
     }
 }

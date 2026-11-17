@@ -90,6 +90,8 @@ class EnglishTest {
         val altOnly = Pronounce.score(Heard(listOf("ice ring", "I drink coffee every morning"), 0.3f), "I drink coffee every morning.")
         assertTrue(altOnly.score in 40..64)
         assertTrue(Pronounce.score(Heard(listOf("hello there")), "I drink coffee every morning.").score < 40)
+        // Артикль розпізнавач не пише — "green apple" на "A green apple." зараховується.
+        assertTrue(Pronounce.score(Heard(listOf("green apple"), 0.8f), "A green apple.").score >= 85)
     }
 
     @Test

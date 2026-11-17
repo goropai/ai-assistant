@@ -85,6 +85,8 @@ class Assistant(
     private val media: com.speedy.assistant.media.MediaShelf? = null,
     private val playback: com.speedy.assistant.media.MediaPlayback? = null,
     private val vlc: com.speedy.assistant.media.Vlc? = null,
+    /** Відео, якого немає в телефоні: YouTube / NewPipe / браузер. */
+    private val onlineVideo: com.speedy.assistant.media.OnlineVideo? = null,
     /** Переклад uk/ru/en (книги й фрази). */
     private val translator: com.speedy.assistant.translate.Translator? = null,
     /** Нічний режим: слухати хропіння до ранку. */
@@ -486,6 +488,12 @@ class Assistant(
      */
     fun manualWake() {
         buzzer?.touch()
+        // Дзвонить будильник чи таймер — дотик його вимикає (голосом під сигнал на J5 не чути).
+        if (ears.ringing && phone?.stopAlarm(snooze = false) == true) {
+            if (busy) interrupt()
+            face.setMood(Mood.HAPPY)
+            return
+        }
         if (busy) return interrupt()
         // Нагадування, що прийшли в тиші (лише вібрація), — тепер уголос.
         if (quietReminders.isNotEmpty()) return runBusy { sayQuietReminders() }
@@ -510,6 +518,12 @@ class Assistant(
         // Йде урок і Спіді чекає відповіді — це вона.
         lessonAnswer?.let { if (it.complete(candidates)) return }
         if (busy) return
+        // Дзвонить будильник: під сигнал фраза розпізнається криво — досить уламка ("будник", "стоп").
+        if (ears.ringing) candidates.firstNotNullOfOrNull { LocalCommands.whileRinging(it) }?.let { cmd ->
+            lastInteraction = SystemClock.uptimeMillis()
+            runBusy { handle(if (cmd == LocalCommand.SNOOZE_ALARM) "відклади будильник" else "вимкни будильник") }
+            return
+        }
         val now = SystemClock.uptimeMillis()
         // Дитина не повторює "Спіді" щоразу: поки хтось поруч (обличчя близько) і розмова була
         // нещодавно — це продовження розмови.
@@ -1454,10 +1468,13 @@ class Assistant(
         when (cmd) {
             is com.speedy.assistant.media.MediaCommand.Play -> {
                 val title = cmd.title ?: return true.also { continueMedia(cmd.kind) }
+                if (cmd.online) return true.also { openOnline(title) }
                 face.setMood(Mood.THINKING)
                 val item = withContext(Dispatchers.IO) { shelf.find(title, cmd.kind) }
                 if (item == null) {
                     if (cmd.kind == null) return false
+                    // Відео немає в телефоні — шукаємо в мережі.
+                    if (cmd.kind == com.speedy.assistant.media.MediaKind.VIDEO && onlineVideo != null) return true.also { openOnline(title) }
                     face.setMood(Mood.SAD)
                     say("Не знайшла ${kindWord(cmd.kind)} «$title».")
                 } else startMedia(item)
@@ -1481,6 +1498,14 @@ class Assistant(
         return true
     }
 
+    /** Пошук відео в мережі (YouTube, якщо встановлений, інакше NewPipe чи браузер). */
+    private suspend fun openOnline(title: String) {
+        face.setMood(Mood.HAPPY)
+        val app = onlineVideo?.search(title)
+        Log.i(TAG, "відео в мережі: «$title» → $app")
+        say(if (app == null) "Не маю чим відкрити відео з інтернету." else "Шукаю «$title» у $app.")
+    }
+
     /** "Продовж дивитись" / "наступна серія": останнє того виду — з місця, де зупинились. */
     private suspend fun continueMedia(kind: com.speedy.assistant.media.MediaKind?) {
         if (kind != com.speedy.assistant.media.MediaKind.VIDEO && playback?.canResume == true) {
@@ -1501,12 +1526,17 @@ class Assistant(
     private suspend fun startMedia(item: com.speedy.assistant.media.MediaItem) {
         val v = vlc ?: return
         val shelf = media ?: return
+        val place = shelf.place(item)?.takeIf { !it.finished }
         if (!v.installed) {
+            // Немає VLC — інший плеєр телефону (без пам'яті, де зупинились); немає жодного — магазин.
+            val file = item.tracks.getOrElse(place?.track ?: 0) { item.tracks.first() }
+            face.setMood(Mood.HAPPY)
+            say("Вмикаю «${item.title}».")
+            if (v.playWithAny(file, item.kind)) return
             face.setMood(Mood.THINKING)
-            say("Для цього мені потрібен плеєр VLC. Відкриваю магазин застосунків — встанови його й попроси ще раз.")
+            say("Не маю чим це відтворити. Відкриваю магазин — встанови плеєр VLC і попроси ще раз.")
             return v.openStore()
         }
-        val place = shelf.place(item)?.takeIf { !it.finished }
         val resume = place != null && (place.positionMs > 30_000 || place.track > 0)
         val part = if (item.tracks.size > 1 && place != null) ", ${if (item.kind == com.speedy.assistant.media.MediaKind.VIDEO) "серія" else "частина"} ${place.track + 1}" else ""
         face.setMood(Mood.HAPPY)
@@ -1851,7 +1881,7 @@ class Assistant(
         val now = SystemClock.uptimeMillis()
         for (c in candidates) {
             for (m in CLAIM.findAll(c.lowercase())) {
-                // Лише точний збіг за звучанням ("міра" ~ "Міра"): "я знаю", "я тут" не мають стати іменем.
+                // Лише точний збіг за звучанням ("ліна" ~ "Ліна"): "я знаю", "я тут" не мають стати іменем.
                 val key = People.soundKey(m.groupValues[1])
                 val name = p.names().firstOrNull { People.soundKey(it) == key } ?: continue
                 claimed = name to now

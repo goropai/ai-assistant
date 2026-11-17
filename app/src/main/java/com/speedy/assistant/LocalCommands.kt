@@ -116,6 +116,8 @@ object LocalCommands {
         "(?:урок|заняття)\\s+англійськ|англійськ\\p{L}*\\s+(?:урок|заняття)" +
             "|(?:^|\\s)(?:навчи|навчиш|навчись|навчіть|навчити|навчай|научи|научиш|повчи|повчиш|повчимо|вчи|вчити|вчимо|вивчати|вивчаймо|вивчимо|" +
             "позаймаємося|позаймайся|займемося|потренуємо|потренуймо)" +
+            // і одне довільне слово — ім'я: "навчи Ліну англійської"
+            "(?:\\s+(?:мене|нас|мені|будь|ласка|трохи|ще|разом|зі|з|мною|нами|у|в|по))*(?:\\s+\\p{L}+)?" +
             "(?:\\s+(?:мене|нас|мені|будь|ласка|трохи|ще|разом|зі|з|мною|нами|у|в|по))*\\s+англійськ",
     )
     private val englishProgress = Regex("(?:прогрес|успіхи)\\s+(?:в|з|у)\\s+англійськ|як\\s+(?:в\\s+мене|у\\s+мене|я)\\s+(?:з|в|у)\\s+англійськ")
@@ -146,6 +148,22 @@ object LocalCommands {
 
     private fun normalize(command: String) =
         command.lowercase().replace(Regex("[,.!?;:—]"), " ").replace(Regex("\\s+"), " ").trim()
+
+    private val ringingSnooze = Regex("відкла|ще\\s+п.ять|ще\\s+трохи")
+    private val ringingStop = Regex("вимк|викл|стоп|досить|буд|таймер|замовкни|тихо")
+
+    /**
+     * Поки дзвонить: під сигнал розпізнається криво ("спільне будник"), тож досить уламка —
+     * "будник", "не буде", "вимк", "стоп". Будь-що інше — не про будильник.
+     */
+    fun whileRinging(command: String): LocalCommand? {
+        val text = normalize(command)
+        return when {
+            ringingSnooze.containsMatchIn(text) -> LocalCommand.SNOOZE_ALARM
+            ringingStop.containsMatchIn(text) -> LocalCommand.STOP_ALARM
+            else -> null
+        }
+    }
 
     fun match(command: String): LocalCommand? {
         val text = normalize(command)

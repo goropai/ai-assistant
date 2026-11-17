@@ -30,6 +30,12 @@ class MediaTest {
         assertEquals(MediaCommand.Play("дюна", MediaKind.VIDEO), MediaCommands.parse("Увімкни фільм Дюна"))
         assertEquals(MediaCommand.Play("кобзар", MediaKind.AUDIO), MediaCommands.parse("постав аудіокнигу Кобзар"))
         assertEquals(MediaCommand.Play("гаррі поттер", null), MediaCommands.parse("увімкни Гаррі Поттер"))
+        // Ютуб — одразу в мережі.
+        val cats = MediaCommand.Play("котиків", MediaKind.VIDEO, online = true)
+        assertEquals(cats, MediaCommands.parse("Відкрий на ютубі котиків"))
+        assertEquals(cats, MediaCommands.parse("знайди котиків на ютубі"))
+        assertEquals(cats, MediaCommands.parse("увімкни мені на YouTube котиків"))
+        assertEquals(MediaCommand.Play("мультик про котиків", MediaKind.VIDEO, online = true), MediaCommands.parse("ютуб мультик про котиків"))
         assertEquals(MediaCommand.Play(null, MediaKind.VIDEO), MediaCommands.parse("увімкни мультик"))
         assertEquals(MediaCommand.Continue(MediaKind.VIDEO), MediaCommands.parse("наступна серія"))
         assertEquals(MediaCommand.Continue(MediaKind.VIDEO), MediaCommands.parse("продовж дивитись"))

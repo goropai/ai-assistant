@@ -73,7 +73,9 @@ object Pronounce {
      * фраза лише в запасних варіантах або бракує слів — нижча; слово, якого бракує, — "слабке".
      */
     fun score(heard: Heard, target: String): Pronunciation {
+        // Артиклі розпізнавач майже ніколи не пише ("A green apple." → "green apple") — не вимагаємо.
         val words = Answers.clean(target).split(' ').filter { it.isNotEmpty() }
+            .let { all -> all.filter { it !in ARTICLES }.ifEmpty { all } }
         if (words.isEmpty() || heard.texts.isEmpty()) return Pronunciation(0, null)
         fun coverage(text: String): Float {
             val got = Answers.clean(text).split(' ').toSet()
@@ -92,4 +94,6 @@ object Pronounce {
         val weak = words.filter { it.length > 2 && it !in topWords }.maxByOrNull { it.length }
         return Pronunciation(score, weak)
     }
+
+    private val ARTICLES = setOf("a", "an", "the")
 }

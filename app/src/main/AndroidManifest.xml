@@ -26,6 +26,11 @@
     <!-- Android 11+: бачити VLC (фільми й аудіокниги грає він) -->
     <queries>
         <package android:name="org.videolan.vlc" />
+        <!-- Відео з інтернету: YouTube, якщо встановлений, інакше NewPipe -->
+        <package android:name="com.google.android.youtube" />
+        <package android:name="org.schabi.newpipe" />
+        <package android:name="org.polymorphicshade.tubular" />
+        <package android:name="org.polymorphicshade.newpipe" />
     </queries>
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />

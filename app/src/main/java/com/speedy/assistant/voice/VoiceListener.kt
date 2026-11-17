@@ -14,6 +14,8 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import com.speedy.assistant.LocalCommands
+import org.json.JSONObject
 
 /**
  * Слух Спіді у два шари:
@@ -125,12 +127,20 @@ class VoiceListener(
     /** Дзвонить будильник / таймер / телефон (команди "вимкни будильник" — без "Спіді"). */
     val ringing: Boolean get() = otherSoundRinging()
 
-    private fun otherSoundRinging(): Boolean = try {
-        val m = Class.forName("android.media.AudioSystem")
-            .getMethod("isStreamActive", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-        listOf(AudioManager.STREAM_ALARM, AudioManager.STREAM_RING).any { m.invoke(null, it, 0) as Boolean }
-    } catch (e: Exception) {
-        false
+    @Volatile private var ringingSeenAt = 0L
+
+    /** Сигнал пульсує (між гудками потік на мить неактивний) — тож "дзвонить" ще кілька секунд після гудка. */
+    private fun otherSoundRinging(): Boolean {
+        val now = SystemClock.uptimeMillis()
+        val active = try {
+            val m = Class.forName("android.media.AudioSystem")
+                .getMethod("isStreamActive", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            listOf(AudioManager.STREAM_ALARM, AudioManager.STREAM_RING).any { m.invoke(null, it, 0) as Boolean }
+        } catch (e: Exception) {
+            false
+        }
+        if (active) ringingSeenAt = now
+        return active || (ringingSeenAt > 0 && now - ringingSeenAt < RINGING_STICKY_MS)
     }
 
     fun isAvailable(): Boolean = SpeechRecognizer.isRecognitionAvailable(context)
@@ -229,7 +239,7 @@ class VoiceListener(
                     break
                 }
                 handler.post { onVoice() }
-                recognizeOffline(ear, record, preroll)
+                recognizeOffline(ear, record, preroll, alarm = !offlineNow())
                 preroll.clear()
                 gate.reset()
             }
@@ -242,8 +252,13 @@ class VoiceListener(
     private fun offlineNow(): Boolean = offline?.ready == true && useOffline()
 
     /** Одна фраза через Vosk: спершу буфер, далі живий звук, поки модель не скаже "кінець фрази". */
-    private fun recognizeOffline(ear: OfflineEar, record: AudioRecord, preroll: ArrayDeque<ShortArray>) {
+    private fun recognizeOffline(ear: OfflineEar, record: AudioRecord, preroll: ArrayDeque<ShortArray>, alarm: Boolean) {
         val recognizer = ear.recognizer() ?: return
+        // Під сигнал Vosk не чує кінця фрази: команда коротка, довше не слухаємо, а уламок
+        // ("будник", "стоп") ловимо вже в проміжному результаті.
+        val limit = if (alarm) ALARM_UTTERANCE_MS else MAX_UTTERANCE_MS
+        fun alarmWords(): String? = if (!alarm) null
+            else JSONObject(recognizer.partialResult).optString("partial").takeIf { LocalCommands.whileRinging(it) != null }
         val started = SystemClock.uptimeMillis()
         try {
             var final: String? = null
@@ -254,9 +269,10 @@ class VoiceListener(
                 if (n <= 0) continue
                 addAudio(if (n == FRAME) buffer else buffer.copyOf(n)) // офлайн — уся фраза для відбитка голосу
                 if (recognizer.acceptWaveForm(buffer, n)) final = recognizer.result
-                else if (SystemClock.uptimeMillis() - started > MAX_UTTERANCE_MS) final = recognizer.finalResult
+                else if (alarmWords() != null) final = JSONObject().put("text", alarmWords()).toString()
+                else if (SystemClock.uptimeMillis() - started > limit) final = recognizer.finalResult
             }
-            val phrases = final?.let { OfflineEar.phrases(it) }.orEmpty()
+            val phrases = final?.let { OfflineEar.phrases(it) }.orEmpty().filter { it != "[unk]" }
             Log.d(TAG, "офлайн почула (${SystemClock.uptimeMillis() - started} мс): ${shown(phrases)}")
             if (phrases.isNotEmpty()) { finishAudio(); handler.post { if (active) onPhrase(phrases) } } else resetAudio()
         } catch (e: Exception) {
@@ -285,7 +301,8 @@ class VoiceListener(
             Log.d(TAG, "дзвонить будильник / таймер / телефон — розпізнавання не вмикаю")
             stopGuard()
             handler.removeCallbacks(resumeGuard)
-            handler.postDelayed(resumeGuard, RINGING_RECHECK_MS)
+            // Офлайн-слух готовий — вартовий одразу слухає далі через нього (не глухнемо на 4 с).
+            handler.postDelayed(resumeGuard, if (offline?.ready == true) 0 else RINGING_RECHECK_MS)
             return
         }
         stopGuard()
@@ -437,8 +454,10 @@ class VoiceListener(
         /** Скільки кадрів мовлення дочитати після спрацювання вартового для оцінки тону. */
         private const val PITCH_EXTRA_FRAMES = 12
         private const val MAX_UTTERANCE_MS = 15_000L
+        private const val ALARM_UTTERANCE_MS = 4_000L
         /** Поки дзвонить будильник — перевіряти знову через стільки. */
         private const val RINGING_RECHECK_MS = 4_000L
+        private const val RINGING_STICKY_MS = 3_000L
         /** Звуку фрази для відбитка голосу — не більше 8 с. */
         private const val MAX_AUDIO = RATE * 8
         /** Скільки слухати після останньої почутої мови, перш ніж повернутися до вартового. */

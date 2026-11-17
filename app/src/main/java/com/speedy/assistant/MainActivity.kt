@@ -233,6 +233,7 @@ class MainActivity : AppCompatActivity() {
             media = mediaShelf,
             playback = playback,
             vlc = vlc,
+            onlineVideo = com.speedy.assistant.media.OnlineVideo(this),
             translator = com.speedy.assistant.translate.MlKitTranslator(),
             night = nightWatch,
             voicePrints = voicePrints,

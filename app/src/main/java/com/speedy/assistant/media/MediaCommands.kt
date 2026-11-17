@@ -6,7 +6,7 @@ sealed interface MediaCommand {
      * "увімкни фільм Дюна", "постав аудіокнигу Кобзар". [kind] — зі слова "фільм"/"аудіокнигу";
      * без нього ("увімкни Дюну") — лише якщо такий файл є, інакше — прохання до моделі.
      */
-    data class Play(val title: String?, val kind: MediaKind?) : MediaCommand
+    data class Play(val title: String?, val kind: MediaKind?, val online: Boolean = false) : MediaCommand
     /** "продовж дивитись", "наступна серія", "продовж аудіокнигу". */
     data class Continue(val kind: MediaKind?) : MediaCommand
     data object Pause : MediaCommand
@@ -24,11 +24,19 @@ object MediaCommands {
     private val continuePlay = Regex("^(?:продовж(?:уй|и|имо)?|давай\\s+далі)\\s+(?:дивитис[ья]|перегляд|слухати|($VIDEO|$AUDIO))$")
     private val pause = Regex("^(?:пауза|на\\s+паузу|постав\\s+на\\s+паузу|зупини\\s+(?:$VIDEO|$AUDIO)|вимкни\\s+(?:$VIDEO|$AUDIO))$")
     private val list = Regex("^(?:які|що\\s+за)\\s+(?:в\\s+тебе\\s+|у\\s+тебе\\s+|в\\s+нас\\s+|у\\s+нас\\s+)?(?:є\\s+)?($VIDEO|$AUDIO)$|^що\\s+(?:є\\s+)?(?:подивитис[ья]|послухати)$")
+    /** "відкрий на ютубі котиків", "знайди котиків на ютубі", "ютуб котики" — одразу в мережі. */
+    private const val YT = "(?:на|в|у|з)\\s+(?:ютуб\\p{L}*|youtube)"
+    private val youtubeFirst = Regex("^(?:(?:$VERB|відкрий|знайди|пошукай|подивись)\\s+)?(?:мені\\s+|нам\\s+)?(?:$YT|ютуб|youtube)\\s+(.+)$")
+    private val youtubeLast = Regex("^(?:$VERB|відкрий|знайди|пошукай)\\s+(?:мені\\s+|нам\\s+)?(.+?)\\s+$YT$")
     /** "увімкни світло / телевізор / Wi-Fi" — не медіа. */
     private val notMedia = Regex("^(?:світло|телевізор|wi-?fi|вай\\s?фай|блютуз|bluetooth|будильник|таймер|звук|гучність|ліхтарик|режим|англійськ|книг|книжк)")
 
     fun parse(phrase: String): MediaCommand? {
         val t = phrase.lowercase().replace(Regex("[,!?«»\"]"), " ").replace(Regex("\\s+"), " ").trim().trimEnd('.')
+        (youtubeFirst.find(t) ?: youtubeLast.find(t))?.let { m ->
+            val title = m.groupValues[1].trim() // "мультики про котиків" — усе в пошук
+            if (title.isNotEmpty()) return MediaCommand.Play(title, MediaKind.VIDEO, online = true)
+        }
         if (next.matches(t)) return MediaCommand.Continue(MediaKind.VIDEO)
         continuePlay.find(t)?.let { m ->
             return MediaCommand.Continue(

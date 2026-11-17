@@ -56,6 +56,8 @@ class SpeedyNotifications : NotificationListenerService() {
 
     private fun toNote(sbn: StatusBarNotification): Note? {
         if (sbn.packageName == packageName || sbn.isOngoing) return null
+        // Системний UI — "Заряд батареї: 15%", "14%", "13%"… щоразу; про заряд Спіді скаже на запит.
+        if (sbn.packageName == "com.android.systemui") return null
         val n = sbn.notification ?: return null
         if (n.flags and Notification.FLAG_GROUP_SUMMARY != 0) return null // підсумок групи — дубль
         val extras = n.extras ?: return null

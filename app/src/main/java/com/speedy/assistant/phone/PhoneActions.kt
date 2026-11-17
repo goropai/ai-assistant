@@ -146,7 +146,8 @@ class PhoneActions(private val context: Context) {
 
     /**
      * Вимкнути / відкласти будильник чи таймер, що дзвонить: кнопка з його сповіщення ("Відхилити",
-     * "Відкласти"); немає — стандартний запит до годинника (Android 6+). false — нічого не дзвонить.
+     * "Відкласти"); немає — та сама кнопка у спливному вікні годинника (Samsung); далі — стандартний
+     * запит до годинника (Android 6+). false — нічого не дзвонить.
      */
     fun stopAlarm(snooze: Boolean): Boolean {
         NotificationStore.clockAlert?.notification?.actions?.let { actions ->
@@ -156,6 +157,7 @@ class PhoneActions(private val context: Context) {
                 return try { a.actionIntent.send(); NotificationStore.clockAlert = null; true } catch (e: Exception) { false }
             }
         }
+        if (SpeedyHands.instance?.dismissClockPopup(snooze) == true) return true
         val action = if (snooze) AlarmClock.ACTION_SNOOZE_ALARM else AlarmClock.ACTION_DISMISS_ALARM
         return start(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }

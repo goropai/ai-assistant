@@ -99,6 +99,30 @@ class SpeedyHands : AccessibilityService() {
         return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
+    /**
+     * Будильник / таймер дзвонить у спливному вікні годинника (Samsung не дає ні кнопки в сповіщенні,
+     * ні реакції на DISMISS_ALARM) — натискаємо там "Відхилити" ("Відкласти").
+     */
+    fun dismissClockPopup(snooze: Boolean): Boolean {
+        val wanted = if (snooze) Regex("(?i)відклад|повтор|snooze") else Regex("(?i)відхил|зупин|вимк|стоп|закри|dismiss|stop")
+        for (w in windows) {
+            val root = w.root ?: continue
+            if (!root.packageName.toString().contains("clock", ignoreCase = true)) continue
+            var target: AccessibilityNodeInfo? = null
+            val seen = mutableListOf<String>()
+            walk(root) { n ->
+                val t = (n.text ?: n.contentDescription)?.toString() ?: return@walk
+                seen += t
+                if (target == null && wanted.containsMatchIn(t)) target = n
+            }
+            Log.i(TAG, "вікно годинника: $seen")
+            var node = target ?: continue
+            while (!node.isClickable) node = node.parent ?: break
+            if (node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        }
+        return false
+    }
+
     fun scroll(forward: Boolean): Boolean {
         val root = rootInActiveWindow ?: return false
         var target: AccessibilityNodeInfo? = null

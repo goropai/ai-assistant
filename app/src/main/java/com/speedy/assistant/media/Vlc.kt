@@ -73,6 +73,20 @@ class Vlc(
             false
         }
 
+    /**
+     * VLC немає — будь-який інший плеєр у телефоні (система спитає, яким, якщо їх кілька).
+     * Без позиції й без "наступної серії": це вміє лише VLC. false — плеєрів немає взагалі.
+     */
+    fun playWithAny(file: File, kind: MediaKind): Boolean = try {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW).setDataAndType(uri(file), if (kind == MediaKind.VIDEO) "video/*" else "audio/*")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        true
+    } catch (e: ActivityNotFoundException) {
+        false
+    }
+
     fun openStore() {
         val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$PACKAGE")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
