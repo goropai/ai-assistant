@@ -42,6 +42,13 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         /** Висота голосу (Гц): сума й кількість замірів. */
         var voiceSum: Float = 0f,
         var voiceCount: Int = 0,
+        /** Стать, сказана прямо (налаштування, "я дівчинка"); null — вгадуємо з імені. */
+        var gender: String? = null,
+        /** Зовнішність коротко (окуляри, волосся, борода) — опис моделі з фото — і коли. */
+        var appearance: String? = null,
+        var appearanceAt: Long = 0,
+        /** День народження: "MM-dd" або "yyyy-MM-dd". */
+        var birthday: String? = null,
     ) {
         /** Скільки не було контакту перед поточною появою (для "привіт" чи "ти знову тут"); не зберігається. */
         var returnGapMs: Long = Long.MAX_VALUE
@@ -114,6 +121,8 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         val f = fact.trim().trimEnd('.').take(MAX_FACT)
         if (f.length < 3) return false
         val p = people.getOrPut(name) { Profile(firstSeen = now) }
+        // "день народження 21 грудня" (модель записала з розмови) — у поле дня народження.
+        PersonalFacts.birthday(f)?.let { p.birthday = it }
         if (p.facts.any { it.equals(f, ignoreCase = true) }) return false
         val topic = topicOf(f)
         if (topic != null) p.facts.removeAll { topicOf(it) == topic }
@@ -123,11 +132,59 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         return true
     }
 
+    /** Стать: сказана прямо, інакше — з імені. */
+    @Synchronized
+    fun gender(name: String): Gender = people[name]?.gender?.let { runCatching { Gender.valueOf(it) }.getOrNull() } ?: Gender.guess(name)
+
+    @Synchronized
+    fun setGender(name: String, g: Gender?) {
+        people.getOrPut(name) { Profile() }.gender = g?.name
+        save()
+    }
+
+    @Synchronized
+    fun setBirthday(name: String, birthday: String) {
+        people.getOrPut(name) { Profile() }.birthday = birthday
+        save()
+    }
+
+    @Synchronized
+    fun birthday(name: String): String? = people[name]?.birthday
+
+    /** Сьогодні в людини день народження. */
+    @Synchronized
+    fun birthdayToday(name: String, now: Long): Boolean {
+        val b = people[name]?.birthday ?: return false
+        val cal = Calendar.getInstance(zone).apply { timeInMillis = now }
+        return b.endsWith("%02d-%02d".format(cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH)))
+    }
+
+    /** Опис зовнішності застарів (чи його немає) — пора оновити з фото. */
+    @Synchronized
+    fun appearanceStale(name: String, now: Long): Boolean = people[name]?.let { now - it.appearanceAt > APPEARANCE_MS } ?: true
+
+    @Synchronized
+    fun setAppearance(name: String, text: String, now: Long) {
+        val p = people.getOrPut(name) { Profile(firstSeen = now) }
+        p.appearance = text.trim().trimEnd('.').take(MAX_FACT)
+        p.appearanceAt = now
+        save()
+    }
+
     /** Коротка довідка для моделі (у повідомленні, а не в системному промпті — кеш не страждає). */
     @Synchronized
     fun summary(name: String, now: Long): String {
         val p = people[name] ?: return ""
         val parts = mutableListOf<String>()
+        // Стать і вік — щоб модель відмінювала правильно ("ти схожа", "рада тебе бачити, Ліно").
+        val child = age(name) == Age.CHILD
+        when (gender(name)) {
+            Gender.FEMALE -> parts += if (child) "дівчинка" else "жінка"
+            Gender.MALE -> parts += if (child) "хлопчик" else "чоловік"
+            Gender.UNKNOWN -> if (child) parts += "дитина"
+        }
+        p.appearance?.let { parts += "зовнішність: $it" }
+        p.birthday?.let { parts += "день народження ${PersonalFacts.spoken(it)}" + if (birthdayToday(name, now)) " (сьогодні!)" else "" }
         parts += p.facts.takeLast(8)
         habit(p)?.let { parts += it }
         // Одяг моделі не передаємо: інакше вона говорить про нього щоразу (лишається в describe і вітанні).
@@ -144,6 +201,7 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         habit(p)?.let { parts += "Зазвичай ти поруч ${it.removePrefix("зазвичай буває ")}" }
         if (p.clothing != null && dayOf(p.clothingAt) == dayOf(now)) parts += "Сьогодні ти в ${p.clothing}"
         if (p.visits > 1) parts += "Ми бачились уже ${p.visits} ${plural(p.visits, "раз", "рази", "разів")}"
+        p.birthday?.let { parts += "Твій день народження — ${PersonalFacts.spoken(it)}" }
         return if (parts.isEmpty()) "Я ще мало про тебе знаю. Розкажи щось про себе!" else parts.joinToString(". ") + "."
     }
 
@@ -292,6 +350,10 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
                     ageOverride = o.optString("age").ifBlank { null },
                     voiceSum = o.optDouble("voiceSum", 0.0).toFloat(),
                     voiceCount = o.optInt("voiceCount"),
+                    gender = o.optString("gender").ifBlank { null },
+                    appearance = o.optString("appearance").ifBlank { null },
+                    appearanceAt = o.optLong("appearanceAt"),
+                    birthday = o.optString("birthday").ifBlank { null },
                 )
             }
         } catch (e: Exception) {
@@ -322,6 +384,10 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
                     .put("age", p.ageOverride.orEmpty())
                     .put("voiceSum", p.voiceSum.toDouble())
                     .put("voiceCount", p.voiceCount)
+                    .put("gender", p.gender.orEmpty())
+                    .put("appearance", p.appearance.orEmpty())
+                    .put("appearanceAt", p.appearanceAt)
+                    .put("birthday", p.birthday.orEmpty())
             )
         }
         s.saveProfiles(changed)
@@ -329,6 +395,8 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
 
     companion object {
         const val VISIT_GAP_MS = 30 * 60_000L
+        /** Опис зовнішності оновлюємо не частіше (фото — моделі). */
+        const val APPEARANCE_MS = 14 * 24 * 3600_000L
         /** Не бачила довше — це вже "повернулась", а не та сама присутність. */
         const val RETURN_MS = 2 * 60_000L
         const val DAY_MS = 24 * 3600_000L

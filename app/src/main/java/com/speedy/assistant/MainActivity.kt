@@ -268,7 +268,7 @@ class MainActivity : AppCompatActivity() {
         connectivity.registerDefaultNetworkCallback(networkCallback)
         // Спіді запустилась — усе, що вже на шторці, прочитане; читаємо лише ті, що прийдуть.
         com.speedy.assistant.phone.NotificationStore.notes.markAllRead()
-        com.speedy.assistant.phone.NotificationStore.onNew = { runOnUiThread { assistant?.announceNotes() } }
+        com.speedy.assistant.phone.NotificationStore.onNew = { runOnUiThread { assistant?.scanNotesForBirthdays(); assistant?.announceNotes() } }
         // Офлайн-слух: модель 78 МБ — завантажуємо лише через Wi-Fi (не мобільний трафік), один раз.
         lifecycleScope.launch {
             // Не вийшло (повільний сайт, немає Wi-Fi) — пробуємо знову кожні 10 хв; до того слухає Google.
@@ -354,6 +354,8 @@ class MainActivity : AppCompatActivity() {
                     val wanted = if (child) com.speedy.assistant.people.Profiles.Age.CHILD else com.speedy.assistant.people.Profiles.Age.ADULT
                     if (now != wanted) profiles.setAge(name, wanted)
                 },
+                gender = { profiles.gender(it) },
+                setGender = { name, g -> profiles.setGender(name, g) },
                 usedToday = { childLimit.usedMinutes(System.currentTimeMillis()) },
                 resetLimit = { childLimit.reset() },
             ) else null

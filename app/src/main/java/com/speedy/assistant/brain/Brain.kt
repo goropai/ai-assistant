@@ -38,6 +38,18 @@ class Brain(
      * @param onSentence якщо задано — відповідь потокова: готові речення "say" віддаються одразу,
      *   а в результаті say порожній (уже сказано). [onMood] — настрій, щойно він відомий.
      */
+    /**
+     * Коротко описати зовнішність людини з фото (окуляри, волосся, борода) — для профілю. Окремий
+     * запит, поза розмовою (в історію не йде). null — не вдалось чи людини не видно.
+     */
+    suspend fun describeAppearance(jpeg: ByteArray): String? {
+        val raw = llm.complete(
+            APPEARANCE_SYSTEM,
+            listOf(Turn(Role.USER, listOf(Part.Text("Опиши зовнішність людини найближче до камери."), Part.Image(jpeg)))),
+        )
+        return AgentReply.parse(raw).say.trim().takeIf { it.length in 3..140 && !it.contains("не видно", ignoreCase = true) }
+    }
+
     suspend fun ask(
         text: String,
         image: ByteArray? = null,
@@ -95,6 +107,17 @@ class Brain(
         const val MAX_NAV_STEPS = 8
 
         const val MAX_SEARCHES = 2
+
+        /** Опис зовнішності: лише прикмети, без оцінок; відповідь — у полі "say" тієї ж схеми JSON. */
+        val APPEARANCE_SYSTEM = """
+            Ти допомагаєш домашньому роботу запам'ятати, як виглядає знайома людина. На фото — людина
+            найближче до камери. У полі "say" — 3–8 слів українською, лише видимі прикмети через кому:
+            окуляри (якщо є), колір і довжина волосся, борода чи вуса (якщо є). Без оцінок зовнішності,
+            віку, ваги чи одягу. Людини не видно — "say": "не видно". Решта полів: mood "neutral",
+            action type "none", remember порожній. Відповідай ЛИШЕ JSON:
+            {"mood": "neutral", "say": "...", "action": {"type": "none", "camera": "none", "direction": "none",
+             "duration_ms": 0, "then_look": false, "query": ""}, "remember": ""}
+        """.trimIndent()
 
         fun searchFollowUp(query: String, result: String?) =
             if (result == null) "[система] Пошук \"$query\" не вдався. Чесно скажи, що не змогла знайти, і відповідай з того, що знаєш."

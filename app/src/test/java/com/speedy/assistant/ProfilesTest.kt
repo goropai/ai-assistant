@@ -48,7 +48,7 @@ class ProfilesTest {
         assertTrue(p.addFact("Тарас", "не любить чай"))
         assertTrue(p.addFact("Тарас", "працює лікарем"))
         val loaded = Profiles(file, utc)
-        assertEquals("не любить чай; працює лікарем", loaded.summary("Тарас", at(0, 12)))
+        assertEquals("чоловік; не любить чай; працює лікарем", loaded.summary("Тарас", at(0, 12))) // стать — з імені
         assertEquals("", loaded.summary("Ніна", at(0, 12)))
     }
 
@@ -88,7 +88,7 @@ class ProfilesTest {
         val p = Profiles(null, utc)
         p.addFact("Бетмен", "любить каву")
         p.rename("Бетмен", "Тарас")
-        assertEquals("любить каву", p.summary("Тарас", at(0, 12)))
+        assertEquals("чоловік; любить каву", p.summary("Тарас", at(0, 12)))
         assertTrue("Бетмен" !in p.names())
     }
 

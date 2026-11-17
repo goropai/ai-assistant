@@ -49,6 +49,11 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("presence", true)
         set(value) = prefs.edit().putBoolean("presence", value).apply()
 
+    /** Раз на 2 тижні фото знайомого — моделі, щоб коротко запам'ятати зовнішність (окуляри, волосся). */
+    var appearanceEnabled: Boolean
+        get() = prefs.getBoolean("appearance", true)
+        set(value) = prefs.edit().putBoolean("appearance", value).apply()
+
     // --- вібрація (кожна — окремо) ---
     /** Нагадування вночі / в нічному режимі — вібрацією замість голосу (скаже після дотику). */
     var vibrateQuiet: Boolean

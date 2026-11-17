@@ -22,6 +22,9 @@ object SettingsDialog {
         val names: List<String>,
         val isChild: (String) -> Boolean,
         val setChild: (String, Boolean) -> Unit,
+        /** Стать (для правильного роду): сказана чи вгадана з імені. */
+        val gender: (String) -> com.speedy.assistant.people.Gender,
+        val setGender: (String, com.speedy.assistant.people.Gender) -> Unit,
         val usedToday: () -> Map<String, Int>,
         val resetLimit: () -> Unit,
     )
@@ -74,6 +77,11 @@ object SettingsDialog {
             isChecked = settings.presenceEnabled
         }
         form.addView(presence)
+        val appearance = CheckBox(context).apply {
+            text = "Запам'ятовувати зовнішність знайомих (фото моделі раз на 2 тижні)"
+            isChecked = settings.appearanceEnabled
+        }
+        form.addView(appearance)
 
         label("Вібрація")
         fun vibe(text: String, on: Boolean) = CheckBox(context).apply { this.text = text; isChecked = on; form.addView(this) }
@@ -92,6 +100,23 @@ object SettingsDialog {
                 isChecked = family!!.isChild(name)
                 form.addView(this)
             }
+        }
+        // Стать — кнопка перемикає "жіноча / чоловіча" (спершу — вгадана з імені).
+        val genders = family?.names.orEmpty().associateWith { family!!.gender(it) }.toMutableMap()
+        family?.names.orEmpty().forEach { name ->
+            form.addView(android.widget.Button(context).apply {
+                fun label() = "$name — стать: " + when (genders[name]) {
+                    com.speedy.assistant.people.Gender.FEMALE -> "жіноча"
+                    com.speedy.assistant.people.Gender.MALE -> "чоловіча"
+                    else -> "невідомо"
+                }
+                text = label()
+                isAllCaps = false
+                setOnClickListener {
+                    genders[name] = if (genders[name] == com.speedy.assistant.people.Gender.FEMALE) com.speedy.assistant.people.Gender.MALE else com.speedy.assistant.people.Gender.FEMALE
+                    text = label()
+                }
+            })
         }
         val usage = TextView(context).apply {
             fun refresh() {
@@ -129,6 +154,8 @@ object SettingsDialog {
                 settings.vibrateCheer = vibeCheer.isChecked
                 settings.childLimitMinutes = limit.text.toString().toIntOrNull() ?: settings.childLimitMinutes
                 family?.names?.zip(childBoxes)?.forEach { (name, box) -> family.setChild(name, box.isChecked) }
+                family?.let { f -> genders.forEach { (name, g) -> if (g != com.speedy.assistant.people.Gender.UNKNOWN && g != f.gender(name)) f.setGender(name, g) } }
+                settings.appearanceEnabled = appearance.isChecked
                 onSaved()
             }
             .setNegativeButton("Скасувати", null)

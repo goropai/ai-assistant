@@ -269,6 +269,7 @@ class Assistant(
         }
         if (morning) morningBriefing()
         if (morning) reportNight(onlyNew = true)
+        refreshAppearance(name)
         face.setMood(Mood.LISTENING)
         awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS
     }
@@ -277,9 +278,10 @@ class Assistant(
      * Що додати до привітання (щоразу інше): давно не бачились; нагадування на сьогодні; недочитана
      * книга; новий колір одягу (раз на день); побажання за часом доби.
      */
-    private fun greetingExtra(name: String): String? {
+    private suspend fun greetingExtra(name: String): String? {
         val now = System.currentTimeMillis()
-        profiles?.greetingHint(name, now)?.let { return it } // "давно не бачились" — найважливіше
+        birthdayGreeting(name)?.let { return it } // день народження — найважливіше
+        profiles?.greetingHint(name, now)?.let { return it } // "давно не бачились"
         val endOfDay = java.util.Calendar.getInstance().apply { set(java.util.Calendar.HOUR_OF_DAY, 23); set(java.util.Calendar.MINUTE, 59) }.timeInMillis
         reminders?.upcoming()?.firstOrNull { (it.forName == null || it.forName == name) && it.at <= endOfDay }
             ?.let { return "До речі, ${whenText(it.at)} — ${it.text}." }
@@ -293,9 +295,76 @@ class Assistant(
             in 17..21 -> listOf("Як пройшов день?", "Гарного вечора!")
             else -> listOf("Чого не спиш?")
         }.random()
+        // Дня народження не знаємо — інколи спитати (відповідь "21 грудня" — у профіль).
+        if (profiles?.birthday(name) == null && Math.random() < ASK_BIRTHDAY_CHANCE) {
+            awaitingBirthday = name
+            awaitingCommandUntil = SystemClock.uptimeMillis() + FOLLOW_UP_WINDOW_MS * 2
+            return "До речі, коли в тебе день народження?"
+        }
         val pick = options.random()
         if (pick.startsWith("Ти сьогодні в")) profiles?.clothingMentioned(name, now)
         return pick
+    }
+
+    /** Кому вже казала "з днем народження" сьогодні (день року). */
+    private val birthdayWished = HashMap<String, Int>()
+
+    /**
+     * День народження сьогодні — з профілю або з календаря телефона ("День народження Тараса" —
+     * Google сам додає дні народження контактів; дата тоді — у профіль). Раз на день.
+     */
+    private suspend fun birthdayGreeting(name: String): String? {
+        val p = profiles ?: return null
+        val now = System.currentTimeMillis()
+        val today = java.util.Calendar.getInstance().get(java.util.Calendar.DAY_OF_YEAR)
+        if (birthdayWished[name] == today) return null
+        var isToday = p.birthdayToday(name, now)
+        if (!isToday) {
+            val events = phone?.todayEvents().orEmpty()
+            if (events.any { com.speedy.assistant.people.PersonalFacts.birthdayOf(it, listOf(name)) != null }) {
+                val c = java.util.Calendar.getInstance()
+                p.setBirthday(name, "%02d-%02d".format(c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH)))
+                Log.i(TAG, "день народження $name — з календаря")
+                isToday = true
+            }
+        }
+        if (!isToday) return null
+        birthdayWished[name] = today
+        chirps.play(Chirp.HAPPY)
+        return "З днем народження! Бажаю тобі багато радості!"
+    }
+
+    /** Спитала "коли в тебе день народження?" — чия наступна відповідь. */
+    private var awaitingBirthday: String? = null
+
+    /** Сповіщення "сьогодні день народження …" про знайомого — дата в профіль (якщо ще не знаємо). */
+    fun scanNotesForBirthdays() {
+        val p = profiles ?: return
+        val known = people?.names().orEmpty()
+        val c = java.util.Calendar.getInstance()
+        val today = "%02d-%02d".format(c.get(java.util.Calendar.MONTH) + 1, c.get(java.util.Calendar.DAY_OF_MONTH))
+        for (n in com.speedy.assistant.phone.NotificationStore.notes.unread()) {
+            if (!n.text.contains("сьогодні", ignoreCase = true) && !n.title.contains("сьогодні", ignoreCase = true)) continue
+            val name = com.speedy.assistant.people.PersonalFacts.birthdayOf("${n.title} ${n.text}", known) ?: continue
+            if (p.birthday(name) == null) {
+                p.setBirthday(name, today)
+                Log.i(TAG, "день народження $name — зі сповіщення ${n.app}")
+            }
+        }
+    }
+
+    /** Зовнішність знайомого застаріла (2 тижні) — фото моделі, коротко в профіль. Тихо, без слів. */
+    private suspend fun refreshAppearance(name: String) {
+        val p = profiles ?: return
+        if (settings?.appearanceEnabled == false || !isOnline() || !p.appearanceStale(name, System.currentTimeMillis())) return
+        val jpeg = try { camera.take(front = true) } catch (e: CancellationException) { throw e } catch (e: Exception) { return }
+        scope.launch {
+            val text = try { brain.describeAppearance(jpeg) } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+            if (text != null) {
+                p.setAppearance(name, text, System.currentTimeMillis())
+                Log.i(TAG, "зовнішність $name: $text")
+            }
+        }
     }
 
     private suspend fun askName() {
@@ -465,6 +534,18 @@ class Assistant(
                 awaitingCommandUntil = 0
                 lastInteraction = SystemClock.uptimeMillis()
                 runBusy { introduce(name) }
+                return
+            }
+        }
+        // Спитала "коли в тебе день народження?" — "21 грудня".
+        awaitingBirthday?.let { who ->
+            awaitingBirthday = null
+            val date = candidates.firstOrNull()?.let { com.speedy.assistant.people.PersonalFacts.date(it) ?: com.speedy.assistant.people.PersonalFacts.birthday(it) }
+            if (date != null && inWindow) {
+                profiles?.setBirthday(who, date)
+                awaitingCommandUntil = 0
+                lastInteraction = SystemClock.uptimeMillis()
+                runBusy { face.setMood(Mood.HAPPY); say("Запам'ятала: ${com.speedy.assistant.people.PersonalFacts.spoken(date)}!") }
                 return
             }
         }
@@ -677,7 +758,8 @@ class Assistant(
                 if (child) english?.progress?.learner(name)?.level?.takeIf { it != com.speedy.assistant.english.Level.KIDS }
                     ?.let { english.progress.setLevel(name, com.speedy.assistant.english.Level.KIDS) }
                 face.setMood(Mood.HAPPY)
-                return say(if (child) "Зрозуміла, $name ще маленький — уроки будуть дитячі." else "Зрозуміла, $name дорослий.")
+                val female = profiles?.gender(name) == com.speedy.assistant.people.Gender.FEMALE
+                return say(if (child) "Зрозуміла, $name ще ${if (female) "маленька" else "маленький"} — уроки будуть дитячі." else "Зрозуміла, $name ${if (female) "доросла" else "дорослий"}.")
             }
             LocalCommand.ENGLISH_PROGRESS -> {
                 val name = partner() ?: "гість"
@@ -796,6 +878,21 @@ class Assistant(
                 return say("Мій заряд $percent ${BatteryAlerts.percentWord(percent)}" + if (charging) ", заряджаюсь." else ".")
             }
             null -> {}
+        }
+        // "Я дівчинка" / "мій день народження 21 грудня" — прямо в профіль співрозмовника.
+        com.speedy.assistant.people.PersonalFacts.gender(command)?.let { g ->
+            val name = partner() ?: return say("Подивись на мене, щоб я знала, про кого це.")
+            profiles?.setGender(name, g)
+            face.setMood(Mood.HAPPY)
+            return say("Зрозуміла, $name!")
+        }
+        com.speedy.assistant.people.PersonalFacts.birthday(command)?.let { date ->
+            val name = partner()
+            if (name != null) {
+                profiles?.setBirthday(name, date)
+                face.setMood(Mood.HAPPY)
+                return say("Запам'ятала: твій день народження — ${com.speedy.assistant.people.PersonalFacts.spoken(date)}!")
+            }
         }
         // "Я люблю каву" — у профіль без моделі; коротке твердження — і відповідаємо самі.
         com.speedy.assistant.people.SelfFacts.extract(command)?.let { fact ->
@@ -2096,6 +2193,8 @@ class Assistant(
         const val CLAIM_MS = 3 * 60_000L
         /** Незнайоме обличчя — питати ім'я лише якщо за стільки не впізнала. */
         const val STRANGER_WAIT_MS = 8_000L
+        /** Як часто під час привітання питати день народження, якщо його не знаємо. */
+        const val ASK_BIRTHDAY_CHANCE = 0.25
         val ALARM_COMMANDS = setOf(LocalCommand.STOP_ALARM, LocalCommand.SNOOZE_ALARM, LocalCommand.STOP)
         /** Знайомих бачила недавно — незнайоме обличчя, мабуть, той самий під іншим кутом. */
         const val RECENT_KNOWN_MS = 5 * 60_000L
