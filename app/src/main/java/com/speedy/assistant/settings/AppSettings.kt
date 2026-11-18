@@ -10,6 +10,11 @@ import com.speedy.assistant.BuildConfig
 class AppSettings(context: Context) {
     private val prefs = context.getSharedPreferences("speedy", Context.MODE_PRIVATE)
 
+    init {
+        // Одразу, до читання полів ключів (інакше діалог налаштувань показав би ключ у старому полі).
+        if (!prefs.contains("gemini_key_mode")) migrateGeminiKey()
+    }
+
     var provider: String
         get() = prefs.getString("provider", null) ?: "claude"
         set(value) = prefs.edit().putString("provider", value).apply()
@@ -30,6 +35,42 @@ class AppSettings(context: Context) {
     var geminiKey: String
         get() = prefs.getString("gemini_key", null).orEmpty()
         set(value) = prefs.edit().putString("gemini_key", value.trim()).apply()
+
+    /** Безкоштовний ключ Gemini (запити можуть іти на навчання моделей Google). */
+    var geminiFreeKey: String
+        get() = prefs.getString("gemini_free_key", null).orEmpty()
+        set(value) = prefs.edit().putString("gemini_free_key", value.trim()).apply()
+
+    var geminiFreeState: String?
+        get() = prefs.getString("gemini_free_state", null)
+        set(value) = prefs.edit().putString("gemini_free_state", value).apply()
+
+    /** Як поєднувати ключі (див. GeminiKeyMode). */
+    var geminiKeyMode: String
+        get() = prefs.getString("gemini_key_mode", null) ?: migrateGeminiKey()
+        set(value) = prefs.edit().putString("gemini_key_mode", value).apply()
+
+    /**
+     * До двох ключів був один — безкоштовний: переносимо його в поле безкоштовного (разом зі станом
+     * моделей) і режим "лише безкоштовний"; ключ з оплатою людина додасть сама.
+     */
+    private fun migrateGeminiKey(): String {
+        val old = prefs.getString("gemini_key", null).orEmpty()
+        val mode = if (old.isNotBlank() && geminiFreeKey.isBlank()) "free" else "paid"
+        prefs.edit().apply {
+            if (mode == "free") {
+                putString("gemini_free_key", old).remove("gemini_key")
+                putString("gemini_free_state", prefs.getString("gemini_state", null)).remove("gemini_state")
+            }
+            putString("gemini_key_mode", mode)
+        }.apply()
+        return mode
+    }
+
+    /** Фото й звук — лише через ключ з оплатою (коли він є). */
+    var geminiFreeNoMedia: Boolean
+        get() = prefs.getBoolean("gemini_free_no_media", true)
+        set(value) = prefs.edit().putBoolean("gemini_free_no_media", value).apply()
 
     var geminiModel: String
         get() = prefs.getString("gemini_model", null)?.takeIf { it.isNotBlank() } ?: BuildConfig.GEMINI_MODEL
@@ -137,5 +178,9 @@ class AppSettings(context: Context) {
         set(value) = prefs.edit().putString("child_usage", value).apply()
 
     val hasActiveKey: Boolean
-        get() = if (provider == "gemini") geminiKey.isNotBlank() else anthropicKey.isNotBlank()
+        get() = if (provider == "gemini") when (geminiKeyMode) {
+            "free" -> geminiFreeKey.isNotBlank()
+            "paid" -> geminiKey.isNotBlank()
+            else -> geminiKey.isNotBlank() || geminiFreeKey.isNotBlank()
+        } else anthropicKey.isNotBlank()
 }

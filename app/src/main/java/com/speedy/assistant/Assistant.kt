@@ -135,6 +135,8 @@ class Assistant(
     private val desires = Desires()
     /** Коли з нею востаннє взаємодіяли (для "нудьги"). */
     private var lastInteraction = SystemClock.uptimeMillis()
+    /** Коли людина востаннє щось сказала Спіді (не з моменту запуску, як [lastInteraction]). */
+    private var lastTalkAt = Long.MIN_VALUE / 2
 
     fun start() {
         // Поки VLC грає аудіокнигу чи музику, мікрофон не слухає (там теж говорять) — лише дотик.
@@ -243,7 +245,8 @@ class Assistant(
         Log.i(TAG, "цікавий факт для $name (${fact.topic}${if (explore) ", нова галузь" else ""})")
         p.factTold(name, fact.topic, fact.text, System.currentTimeMillis())
         face.setMood(Mood.HAPPY)
-        val text = if (sameTopic != null) fact.text else "$name, а знаєш? ${fact.text}"
+        val body = fact.text.replaceFirstChar { it.uppercase() }
+        val text = if (sameTopic != null) body else "$name, а знаєш? $body"
         say(text)
         brain.noteSaid(text)
         // Відповідь ("ого!", "нудно", "а чому?") — без "Спіді".
@@ -306,6 +309,11 @@ class Assistant(
         // Обличчя важливіші за загальне "хтось прийшов": вітаємо на ім'я або знайомимось.
         events.firstOrNull { it is PresenceEvent.Recognized }?.let { event ->
             pendingStranger?.cancel() // упізнала — "як тебе звати?" вже не питаємо
+            // Щойно розмовляли (камера лише на мить втратила обличчя) — "з поверненням" було б дивним.
+            if (SystemClock.uptimeMillis() - lastTalkAt < TALKED_RECENTLY_MS) {
+                profiles?.greeted((event as PresenceEvent.Recognized).name)
+                return
+            }
             runBusy { greetKnown((event as PresenceEvent.Recognized).name) }
             return
         }
@@ -682,6 +690,7 @@ class Assistant(
         if (named != null && named.isNotEmpty()) buzzer?.touch() // почула звертання ("Спіді" без команди — у greet)
         awaitingCommandUntil = 0
         lastInteraction = SystemClock.uptimeMillis()
+        lastTalkAt = lastInteraction
         inConversation = true
         noteClaimedName(candidates)
         noteVoice()
@@ -1028,6 +1037,8 @@ class Assistant(
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return }
         // Книги вголос — без моделі ("почитай Кобзаря" без такої книги — далі, до моделі).
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return }
+        // Новини (з пошуком) — до сповіщень: "які новини в світі" — не про шторку телефону.
+        if (com.speedy.assistant.news.News.isRequest(command)) return newsDigest()
         // Сповіщення й керування іншими застосунками — без моделі.
         com.speedy.assistant.phone.HandsCommands.parse(command, otherAppOpen = !inForeground())?.let { return handleHands(it) }
         // Дії на телефоні — без моделі; якщо не вийшло (нема такого застосунку) — далі до моделі.
@@ -1165,6 +1176,7 @@ class Assistant(
         com.speedy.assistant.phone.EventParser.parse(command, System.currentTimeMillis())?.let { addCalendarEvent(it); return true }
         com.speedy.assistant.night.NightCommands.parse(command)?.let { handleNight(it); return true }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { schoolLesson(it, command); return true }
+        if (com.speedy.assistant.news.News.isRequest(command)) { newsDigest(); return true }
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return true }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return true }
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return true }
@@ -2271,14 +2283,49 @@ class Assistant(
                 Triple(here.latitude, here.longitude, null)
             }
             val forecast = service.forecast(lat, lon)
-            face.setMood(Mood.HAPPY)
-            say(com.speedy.assistant.weather.WeatherText.answer(forecast, query, name))
+            // Повітря — для "зараз" і окремого питання (на завтра прогнозу повітря не даємо); не вдалось — без нього.
+            val air = if (query.tomorrow) null else try {
+                service.airQuality(lat, lon)
+            } catch (e: java.io.IOException) {
+                Log.w(TAG, "air quality failed", e)
+                null
+            }
+            face.setMood(if ((air?.aqi ?: 0) >= 60) Mood.SAD else Mood.HAPPY)
+            say(com.speedy.assistant.weather.WeatherText.answer(forecast, query, name, air))
         } catch (e: java.io.IOException) {
             Log.w(TAG, "weather failed", e)
             face.setMood(Mood.SAD)
             chirps.play(Chirp.NO_NETWORK)
             say("Не вдалося дізнатися погоду. Перевір інтернет.")
         }
+    }
+
+    /**
+     * Огляд новин: де ми (місто), що цікавить співрозмовника — пошук свіжих новин, далі модель складає
+     * короткий огляд за важливістю (і може відповісти на "розкажи детальніше про…").
+     */
+    private suspend fun newsDigest() {
+        val search = webSearch ?: return say("Я поки не вмію шукати новини.")
+        if (!isOnline()) return say("Для новин потрібен інтернет.")
+        face.setMood(Mood.THINKING)
+        say("Зараз гляну новини…")
+        val place = locator?.let { loc ->
+            kotlinx.coroutines.withTimeoutOrNull(NEWS_LOCATE_MS) { loc.locate()?.let { loc.placeName(it) } }
+        }?.substringBefore(',')?.trim()?.takeIf { it.isNotEmpty() } // лише місто: вулицю в пошук не віддаємо
+        val name = partner()
+        val interests = name?.let { profiles?.interests(it)?.first }.orEmpty()
+        val query = com.speedy.assistant.news.News.query(place, interests, System.currentTimeMillis())
+        val found = try {
+            search(query)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "новини: пошук не вдався", e)
+            null
+        }
+        Log.i(TAG, "новини: місце ${place ?: "—"}, інтереси $interests, знайдено ${found?.length ?: 0} симв.")
+        inConversation = true
+        askModel(com.speedy.assistant.news.News.digestPrompt(found, place, interests))
     }
 
     private suspend fun tellWhere() {
@@ -2482,8 +2529,12 @@ class Assistant(
         const val RECENT_KNOWN_MS = 5 * 60_000L
         /** "Привіт" знову — лише якщо не було контакту довше. */
         const val GREET_AGAIN_MS = 3 * 3600_000L
+        /** Розмова була щойно — знайоме обличчя знову в кадрі не вітаємо. */
+        const val TALKED_RECENTLY_MS = 5 * 60_000L
         /** Сторож вмикається не одразу — встигнути вийти з кімнати. */
         const val GUARD_DELAY_MS = 30_000L
+        /** Місце для новин — не довше (GPS може думати довго; тоді — новини України). */
+        const val NEWS_LOCATE_MS = 6_000L
         /** Обличчя біля камери не старше — щоб вирішити, хто відповів на уроці. */
         const val ANSWER_FACE_MS = 4_000L
         /** Цікавий факт: лише коли розмови не було стільки, з такою ймовірністю на хвилину. */

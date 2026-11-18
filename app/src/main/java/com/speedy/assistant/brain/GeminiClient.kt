@@ -43,6 +43,8 @@ class GeminiClient(
         val order = models.order(model, now(), max = 12)
         val deadline = now() + ATTEMPTS_BUDGET_MS
         var last: Exception? = null
+        // Усі моделі відмовили "квота вичерпана" — це ключ вичерпав ліміт (інший ключ може допомогти).
+        var quotaOnly = true
         for ((i, candidate) in order.withIndex()) {
             if (i > 0 && now() > deadline) break
             var started = false
@@ -62,9 +64,11 @@ class GeminiClient(
                     else -> throw e
                 }
                 handleFailure(candidate, e)
+                if (!(e is GeminiHttpException && e.code == 429)) quotaOnly = false
                 last = e
             }
         }
+        if (quotaOnly && last != null) throw GeminiQuotaException("Gemini: квоту ключа вичерпано (${order.joinToString()})", last)
         throw LlmException("Gemini: жодна модель не відповіла (${order.joinToString()})", last)
     }
 
@@ -78,9 +82,14 @@ class GeminiClient(
                     // 400 від окремої моделі — вона не підтримує щось із запиту (схему, thinking);
                     // інші моделі можуть упоратись, а цю — надовго в бік.
                     400 -> GeminiModels.Failure.NOT_FOUND
+                    // Досягнуто ліміту витрат проєкту (spend cap) / оплата не діє — це "квота ключа":
+                    // інший ключ (безкоштовний) може допомогти.
+                    403 -> if (SPEND_LIMIT.containsMatchIn(e.message.orEmpty())) throw GeminiQuotaException("Gemini: ліміт витрат ключа", e) else throw e
                     else -> throw e // 401/403 — проблема ключа, інша модель не допоможе
                 }
-                Log.w(TAG, "$candidate: HTTP ${e.code}, пробую іншу модель")
+                // Що саме відповів Google (без ключа): "limit: 0", "per day", "spend cap"… — щоб розуміти причину.
+                val why = Regex("\"message\"\\s*:\\s*\"([^\"]{0,160})").find(e.message.orEmpty())?.groupValues?.get(1).orEmpty()
+                Log.w(TAG, "$candidate: HTTP ${e.code}, пробую іншу модель${if (why.isNotEmpty()) " ($why)" else ""}")
                 models.failed(candidate, failure, now())
             }
             else -> {
@@ -270,9 +279,14 @@ class GeminiClient(
 
     private class GeminiHttpException(val code: Int, message: String) : LlmException(message)
 
+    /** Ключ вичерпав квоту на всіх моделях — час перемкнутись на інший ключ. */
+    class GeminiQuotaException(message: String, cause: Throwable?) : LlmException(message, cause)
+
     private companion object {
         const val TAG = "GeminiClient"
         const val ATTEMPTS_BUDGET_MS = 20_000L
+        /** Відмова через ліміт витрат чи оплату, а не через сам ключ. */
+        val SPEND_LIMIT = Regex("(?i)spend|billing|cap|quota|exceeded")
         const val BASE = "https://generativelanguage.googleapis.com/v1beta"
         val JSON = "application/json".toMediaType()
     }

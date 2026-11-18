@@ -57,6 +57,23 @@ class WeatherService(private val http: OkHttpClient) {
         return forecast
     }
 
+    private var cachedAir: Triple<String, Long, AirQuality>? = null
+
+    /** Якість повітря зараз (Open-Meteo, без ключа); null — немає даних для цього місця. */
+    suspend fun airQuality(latitude: Double, longitude: Double, now: Long = System.currentTimeMillis()): AirQuality? {
+        val key = "%.2f,%.2f".format(java.util.Locale.ROOT, latitude, longitude)
+        cachedAir?.let { (k, at, a) -> if (k == key && now - at < CACHE_MS) return a }
+        val url = "https://air-quality-api.open-meteo.com/v1/air-quality".toHttpUrl().newBuilder()
+            .addQueryParameter("latitude", latitude.toString())
+            .addQueryParameter("longitude", longitude.toString())
+            .addQueryParameter("current", "european_aqi,pm2_5,pm10")
+            .addQueryParameter("timezone", "auto")
+            .build()
+        val air = parseAir(get(url.toString())) ?: return null
+        cachedAir = Triple(key, now, air)
+        return air
+    }
+
     private suspend fun get(url: String): JSONObject = withContext(Dispatchers.IO) {
         http.newCall(Request.Builder().url(url).build()).execute().use {
             if (!it.isSuccessful) throw IOException("Open-Meteo HTTP ${it.code}")
@@ -66,6 +83,13 @@ class WeatherService(private val http: OkHttpClient) {
 
     companion object {
         const val CACHE_MS = 30 * 60_000L
+
+        fun parseAir(json: JSONObject): AirQuality? {
+            val c = json.optJSONObject("current") ?: return null
+            if (c.isNull("european_aqi")) return null
+            fun num(k: String) = if (c.isNull(k)) null else c.optDouble(k).takeIf { !it.isNaN() }
+            return AirQuality(c.optDouble("european_aqi").toInt(), num("pm2_5"), num("pm10"))
+        }
 
         fun parseForecast(json: JSONObject): Forecast {
             val current = json.getJSONObject("current")

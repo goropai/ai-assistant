@@ -71,8 +71,25 @@ object SettingsDialog {
         val anthropicKey = field(settings.anthropicKey, "sk-ant-…", secret = true)
         label("Модель Claude")
         val claudeModel = field(settings.claudeModel, BuildConfig.CLAUDE_MODEL)
-        label("Ключ Gemini")
+        label("Ключ Gemini з оплатою (білінг у Google Cloud)")
         val geminiKey = field(settings.geminiKey, "AIza…", secret = true)
+        label("Ключ Gemini безкоштовний (Google може вчити на цих запитах моделі)")
+        val geminiFreeKey = field(settings.geminiFreeKey, "AIza…", secret = true)
+        label("Ключі Gemini")
+        val modes = com.speedy.assistant.brain.GeminiKeyMode.entries.associateWith { m ->
+            RadioButton(context).apply { text = m.ua; id = View.generateViewId() }
+        }
+        val keyModes = RadioGroup(context).apply {
+            orientation = RadioGroup.VERTICAL
+            modes.values.forEach { addView(it) }
+            check(modes.getValue(com.speedy.assistant.brain.GeminiKeyMode.of(settings.geminiKeyMode)).id)
+        }
+        form.addView(keyModes)
+        val freeNoMedia = CheckBox(context).apply {
+            text = "Фото й звук — лише через ключ з оплатою (безкоштовному — лише текст)"
+            isChecked = settings.geminiFreeNoMedia
+        }
+        form.addView(freeNoMedia)
         label("Модель Gemini")
         val geminiModel = field(settings.geminiModel, BuildConfig.GEMINI_MODEL)
         label("Колісна платформа (порожньо = автопошук)")
@@ -221,6 +238,9 @@ object SettingsDialog {
                 settings.anthropicKey = anthropicKey.text.toString()
                 settings.claudeModel = claudeModel.text.toString()
                 settings.geminiKey = geminiKey.text.toString()
+                settings.geminiFreeKey = geminiFreeKey.text.toString()
+                settings.geminiKeyMode = modes.entries.first { it.value.id == keyModes.checkedRadioButtonId }.key.code
+                settings.geminiFreeNoMedia = freeNoMedia.isChecked
                 settings.geminiModel = geminiModel.text.toString()
                 settings.robotUrl = robotUrl.text.toString()
                 settings.presenceEnabled = presence.isChecked

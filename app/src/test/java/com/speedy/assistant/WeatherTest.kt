@@ -1,5 +1,6 @@
 package com.speedy.assistant
 
+import com.speedy.assistant.weather.AirQuality
 import com.speedy.assistant.weather.Day
 import com.speedy.assistant.weather.Forecast
 import com.speedy.assistant.weather.WeatherQuery
@@ -61,12 +62,39 @@ class WeatherTest {
         val f = WeatherService.parseForecast(json)
         assertEquals(Forecast(5.0, 3, 13.7, Day(63, 7.0, 4.2, 100), Day(63, 8.9, 3.5, 98)), f)
         assertEquals(
-            "Зараз (Ужгород) плюс 5 градусів, хмарно. Сьогодні від плюс 4 градуси до плюс 7 градусів, ймовірність опадів 100%.",
+            "Зараз (Ужгород) плюс 5 градусів, хмарно. Сьогодні від плюс 4 градусів до плюс 7 градусів, ймовірність опадів 100%.",
             WeatherText.answer(f, WeatherQuery(false, "Ужгороді"), "Ужгород"),
         )
         assertEquals(
-            "Завтра дощ, від плюс 4 градуси до плюс 9 градусів, ймовірність опадів 98%.",
+            "Завтра дощ, від плюс 4 градусів до плюс 9 градусів, ймовірність опадів 98%.",
             WeatherText.answer(f, WeatherQuery(true, null), null),
         )
+    }
+
+    @Test
+    fun airQuality() {
+        assertTrue(WeatherText.isWeatherQuestion("яке зараз повітря?"))
+        assertTrue(WeatherText.isWeatherQuestion("яка якість повітря в Києві"))
+        assertTrue(WeatherText.parse("яке повітря надворі").airOnly)
+        assertEquals(false, WeatherText.parse("яка погода і яке повітря").airOnly)
+        val air = WeatherService.parseAir(JSONObject("""{"current":{"european_aqi":72,"pm2_5":31.4,"pm10":40.0}}"""))!!
+        assertEquals(72, air.aqi)
+        val f = Forecast(5.0, 3, 10.0, Day(3, 8.0, 1.0, 10), null)
+        val full = WeatherText.answer(f, WeatherQuery(false, null), null, air)
+        assertTrue(full, full.contains("Повітря погане, дрібного пилу 31 мікрограм на кубометр.") && full.contains("відкласти"))
+        val clean = WeatherText.answer(f, WeatherQuery(false, null), null, AirQuality(15, 4.2, 9.0))
+        assertTrue(clean, !clean.contains("Повітря"))
+        val only = WeatherText.answer(f, WeatherQuery(false, null, airOnly = true), null, AirQuality(15, 4.2, 9.0))
+        assertEquals("Повітря чисте.", only)
+        assertEquals(null, WeatherService.parseAir(JSONObject("""{"current":{"european_aqi":null}}""")))
+    }
+
+    @Test
+    fun degreesAfterPreposition() {
+        assertEquals("плюс 1 градуса", WeatherText.degreesFrom(1.0))
+        assertEquals("плюс 4 градусів", WeatherText.degreesFrom(4.0))
+        assertEquals("мінус 11 градусів", WeatherText.degreesFrom(-11.0))
+        assertEquals("плюс 21 градуса", WeatherText.degreesFrom(21.0))
+        assertEquals("0 градусів", WeatherText.degreesFrom(0.0))
     }
 }
