@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.os.SystemClock
 import android.util.AttributeSet
@@ -50,6 +51,33 @@ class FaceView @JvmOverloads constructor(
 
     var mood: Mood = Mood.NEUTRAL
         private set
+
+    // --- Ілюстрація до уроку: очі меншають і йдуть угору, внизу — малюнок ---
+    private var picture: List<List<String>>? = null
+    private var pictureFrom = 0f
+    private var pictureTo = 0f
+    private var pictureStart = 0L
+    private val picturePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; color = Color.WHITE }
+    private val shapePath = Path()
+
+    /**
+     * Показати малюнок (рядки "клітинок": емодзі, текст чи фігура "circle:red", "square:blue",
+     * "triangle:green", "star:yellow", "heart:red") або прибрати (null).
+     */
+    fun showPicture(rows: List<List<String>>?) {
+        mirror?.showPicture(rows)
+        val now = SystemClock.uptimeMillis()
+        pictureFrom = pictureProgress(now)
+        pictureTo = if (rows.isNullOrEmpty()) 0f else 1f
+        if (!rows.isNullOrEmpty()) picture = rows
+        pictureStart = now
+        postInvalidateOnAnimation()
+    }
+
+    private fun pictureProgress(now: Long): Float {
+        val t = ((now - pictureStart).toFloat() / PICTURE_MS).coerceIn(0f, 1f)
+        return pictureFrom + (pictureTo - pictureFrom) * easeInOut(t)
+    }
 
     init {
         setBackgroundColor(Color.BLACK)
@@ -174,14 +202,19 @@ class FaceView @JvmOverloads constructor(
             }
         }
 
+        val pic = pictureProgress(now)
+        if (now - pictureStart < PICTURE_MS) animating = true
+        if (pic <= 0.001f && pictureTo == 0f) picture = null
+
         var bob = 0f
         if (speaking) {
             bob = sin(now / 110.0).toFloat() * 0.035f
             animating = true
         }
 
-        drawEye(canvas, left = true, s = shape, blink = blink, bob = bob)
-        drawEye(canvas, left = false, s = shape, blink = blink, bob = bob)
+        drawEye(canvas, left = true, s = shape, blink = blink, bob = bob, pic = pic)
+        drawEye(canvas, left = false, s = shape, blink = blink, bob = bob, pic = pic)
+        if (pic > 0.01f) drawPicture(canvas, pic)
         drawBrainStatus(canvas)
 
         if (animating) postInvalidateOnAnimation()
@@ -198,12 +231,15 @@ class FaceView @JvmOverloads constructor(
         canvas.drawCircle(width / 2f, height - r * 4, r, statusPaint)
     }
 
-    private fun drawEye(canvas: Canvas, left: Boolean, s: EyeShape, blink: Float, bob: Float) {
+    private fun drawEye(canvas: Canvas, left: Boolean, s: EyeShape, blink: Float, bob: Float, pic: Float) {
+        // Малюнок: очі втричі менші й угорі.
+        val k = 1f - (1f - PICTURE_EYES) * pic
+        val baseY = centerY + (eyeH * PICTURE_EYES * 0.75f - centerY) * pic
         val side = if (left) -1f else 1f
-        val cx = width / 2f + side * eyeSpacing + s.gazeX * eyeW * 0.6f
-        val cy = centerY + s.gazeY * eyeH * 0.5f - bob * eyeH
-        val w = eyeW * s.scaleX
-        val h = eyeH * s.scaleY * blink * (1f + bob)
+        val cx = width / 2f + side * eyeSpacing * k + s.gazeX * eyeW * k * 0.6f
+        val cy = baseY + s.gazeY * eyeH * k * 0.5f - bob * eyeH * k
+        val w = eyeW * k * s.scaleX
+        val h = eyeH * k * s.scaleY * blink * (1f + bob)
 
         eyeRect.set(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f)
         val r = min(w, h) * s.roundness
@@ -224,7 +260,78 @@ class FaceView @JvmOverloads constructor(
         }
     }
 
+    /** Малюнок під очима: кожен рядок — по центру, клітинки однакового розміру. */
+    private fun drawPicture(canvas: Canvas, pic: Float) {
+        val rows = picture ?: return
+        val top = eyeH * PICTURE_EYES * 1.6f
+        val bottom = height - resources.displayMetrics.density * 20
+        val areaW = width * 0.92f
+        val cols = rows.maxOf { it.size }.coerceAtLeast(1)
+        val cell = min(areaW / cols, (bottom - top) / rows.size)
+        val alpha = (255 * pic).toInt()
+        rows.forEachIndexed { r, row ->
+            val cy = top + (bottom - top - cell * rows.size) / 2f + cell * (r + 0.5f)
+            row.forEachIndexed { c, token ->
+                val cx = width / 2f + (c - (row.size - 1) / 2f) * cell
+                drawToken(canvas, token.trim(), cx, cy, cell * 0.8f, alpha)
+            }
+        }
+    }
+
+    private fun drawToken(canvas: Canvas, token: String, cx: Float, cy: Float, size: Float, alpha: Int) {
+        val m = SHAPE.matchEntire(token.lowercase())
+        if (m == null) {
+            picturePaint.color = Color.WHITE
+            picturePaint.alpha = alpha
+            picturePaint.textSize = size * (if (token.length <= 2) 0.85f else 1.6f / token.length.coerceAtLeast(2))
+            canvas.drawText(token, cx, cy - (picturePaint.descent() + picturePaint.ascent()) / 2f, picturePaint)
+            return
+        }
+        picturePaint.color = COLORS[m.groupValues[2]] ?: Color.WHITE
+        picturePaint.alpha = alpha
+        val r = size / 2f
+        when (m.groupValues[1]) {
+            "circle" -> canvas.drawCircle(cx, cy, r, picturePaint)
+            "square" -> canvas.drawRect(cx - r * 0.85f, cy - r * 0.85f, cx + r * 0.85f, cy + r * 0.85f, picturePaint)
+            "triangle" -> {
+                shapePath.reset()
+                shapePath.moveTo(cx, cy - r); shapePath.lineTo(cx + r, cy + r * 0.8f); shapePath.lineTo(cx - r, cy + r * 0.8f); shapePath.close()
+                canvas.drawPath(shapePath, picturePaint)
+            }
+            "star" -> {
+                shapePath.reset()
+                for (i in 0 until 10) {
+                    val a = Math.PI / 2 + i * Math.PI / 5
+                    val rr = if (i % 2 == 0) r else r * 0.45f
+                    val x = cx + (rr * kotlin.math.cos(a)).toFloat()
+                    val y = cy - (rr * kotlin.math.sin(a)).toFloat()
+                    if (i == 0) shapePath.moveTo(x, y) else shapePath.lineTo(x, y)
+                }
+                shapePath.close()
+                canvas.drawPath(shapePath, picturePaint)
+            }
+            "heart" -> {
+                shapePath.reset()
+                shapePath.moveTo(cx, cy + r * 0.85f)
+                shapePath.cubicTo(cx - r * 1.4f, cy - r * 0.1f, cx - r * 0.6f, cy - r * 1.1f, cx, cy - r * 0.35f)
+                shapePath.cubicTo(cx + r * 0.6f, cy - r * 1.1f, cx + r * 1.4f, cy - r * 0.1f, cx, cy + r * 0.85f)
+                canvas.drawPath(shapePath, picturePaint)
+            }
+        }
+    }
+
     private companion object {
+        const val PICTURE_MS = 400L
+        /** Розмір очей, поки показано малюнок. */
+        const val PICTURE_EYES = 0.35f
+        val SHAPE = Regex("(circle|square|triangle|star|heart)(?::(\\w+))?")
+        val COLORS = mapOf(
+            "red" to 0xFFE53935.toInt(), "blue" to 0xFF1E88E5.toInt(), "green" to 0xFF43A047.toInt(),
+            "yellow" to 0xFFFDD835.toInt(), "orange" to 0xFFFB8C00.toInt(), "purple" to 0xFF8E24AA.toInt(),
+            "pink" to 0xFFEC407A.toInt(), "brown" to 0xFF8D6E63.toInt(), "white" to Color.WHITE, "gray" to 0xFF9E9E9E.toInt(),
+            "black" to 0xFF424242.toInt(),
+        )
+
         /** Скільки тримати погляд на об'єкті, перш ніж знову "розглядатися". */
         const val LOOK_HOLD_MS = 3000L
     }

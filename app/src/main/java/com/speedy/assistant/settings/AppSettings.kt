@@ -54,6 +54,11 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("appearance", true)
         set(value) = prefs.edit().putBoolean("appearance", value).apply()
 
+    /** Час від часу цікаві факти під інтереси знайомих. */
+    var factsEnabled: Boolean
+        get() = prefs.getBoolean("facts", true)
+        set(value) = prefs.edit().putBoolean("facts", value).apply()
+
     // --- вібрація (кожна — окремо) ---
     /** Нагадування вночі / в нічному режимі — вібрацією замість голосу (скаже після дотику). */
     var vibrateQuiet: Boolean
@@ -74,6 +79,38 @@ class AppSettings(context: Context) {
     var vibrateCheer: Boolean
         get() = prefs.getBoolean("vibrate_cheer", true)
         set(value) = prefs.edit().putBoolean("vibrate_cheer", value).apply()
+
+    // --- режим сторожа: куди слати тривогу (канал діє, якщо заповнений) ---
+    private fun str(key: String) = prefs.getString(key, null).orEmpty()
+    private fun put(key: String, value: String) = prefs.edit().putString(key, value.trim()).apply()
+
+    var guardTelegramToken: String get() = str("guard_tg_token"); set(v) = put("guard_tg_token", v)
+    var guardTelegramChat: String get() = str("guard_tg_chat"); set(v) = put("guard_tg_chat", v)
+    /** Пошта: сервер SMTP (порт 465 — SSL, 587 — STARTTLS), логін, пароль застосунку, кому. */
+    var guardSmtpHost: String get() = str("guard_smtp_host"); set(v) = put("guard_smtp_host", v)
+    var guardSmtpPort: Int
+        get() = prefs.getInt("guard_smtp_port", 465)
+        set(value) = prefs.edit().putInt("guard_smtp_port", value).apply()
+    var guardSmtpUser: String get() = str("guard_smtp_user"); set(v) = put("guard_smtp_user", v)
+    var guardSmtpPassword: String get() = str("guard_smtp_pass"); set(v) = put("guard_smtp_pass", v)
+    var guardEmailTo: String get() = str("guard_email_to"); set(v) = put("guard_email_to", v)
+    var guardSmsNumber: String get() = str("guard_sms"); set(v) = put("guard_sms", v)
+    var guardCallNumber: String get() = str("guard_call"); set(v) = put("guard_call", v)
+
+    /** Тривога на звуки: чужий голос, двері, стук, скло, сигналізація. */
+    var guardSounds: Boolean
+        get() = prefs.getBoolean("guard_sounds", true)
+        set(value) = prefs.edit().putBoolean("guard_sounds", value).apply()
+
+    /** Тривога на рух, у якому камера не впізнала ні людини, ні тварини. */
+    var guardMotion: Boolean
+        get() = prefs.getBoolean("guard_motion", true)
+        set(value) = prefs.edit().putBoolean("guard_motion", value).apply()
+
+    /** Хвилин між тривогами (менше — не надсилаємо знову, лише записуємо). */
+    var guardCooldownMinutes: Int
+        get() = prefs.getInt("guard_cooldown", 5)
+        set(value) = prefs.edit().putInt("guard_cooldown", value.coerceIn(1, 120)).apply()
 
     // --- PIN батьків (лише хеш із сіллю) ---
     val hasPin: Boolean get() = prefs.getString("pin_hash", null) != null

@@ -170,6 +170,22 @@ class MainActivity : AppCompatActivity() {
         // PDFBox бере шрифти й таблиці гліфів із ресурсів застосунку (для тексту PDF-книг).
         com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
         presence = PresenceWatcher(this, this, people, pets, profiles) { events -> assistant?.onPresence(events) }
+        guardMode = com.speedy.assistant.guard.GuardMode(
+            scope = lifecycleScope,
+            alerts = guardAlerts,
+            // Записи тривог — у теці застосунку (Android/data/…/files/guard).
+            root = getExternalFilesDir("guard") ?: java.io.File(filesDir, "guard"),
+            cooldownMs = { settings.guardCooldownMinutes * 60_000L },
+            soundsOn = { settings.guardSounds },
+            cameraFactory = { onFriend, onDetect ->
+                com.speedy.assistant.guard.GuardCamera(this, this, people, pets, motionAlarm = { settings.guardMotion }, onFriend, onDetect)
+            },
+            soundsFactory = { worth, onSound -> com.speedy.assistant.guard.GuardSounds(this, worth, onSound) },
+            onFriend = { name -> assistant?.guardFriend(name) },
+            bringToFront = {
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
+            },
+        )
 
         assistant = Assistant(
             scope = lifecycleScope,
@@ -244,6 +260,13 @@ class MainActivity : AppCompatActivity() {
             onSettingsChanged = { runOnUiThread { updatePresence(); checkBrain() } },
             nightLog = nightLog,
             onNight = { on -> runOnUiThread { setNightMode(on) } },
+            guard = guardMode,
+            guardAlerts = guardAlerts,
+            onGuard = { on -> runOnUiThread { setGuardMode(on) } },
+            onLesson = { on -> runOnUiThread { lessonMode = on; updatePresence() } },
+            recordSound = { seconds -> com.speedy.assistant.voice.SoundClip.record(this, seconds) },
+            generateJson = { system, prompt -> llm.generateJson(system, prompt) },
+            school = com.speedy.assistant.school.SchoolProgress(java.io.File(filesDir, "school.json")),
             hasFileAccess = ::hasFileAccess,
             earsFactory = { onPhrase ->
                 VoiceListener(this, onPhrase = onPhrase, onFatalError = { toast(it) }, onVoice = ::warmBrain, offline = offlineEar,
@@ -360,10 +383,27 @@ class MainActivity : AppCompatActivity() {
                 usedToday = { childLimit.usedMinutes(System.currentTimeMillis()) },
                 resetLimit = { childLimit.reset() },
             ) else null
-            SettingsDialog.show(this, settings, family) {
+            val guard = SettingsDialog.Guard(
+                findTelegramChat = { token, done ->
+                    lifecycleScope.launch {
+                        val id = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.speedy.assistant.guard.Alerts.findTelegramChat(http, token)
+                        }
+                        done(id)
+                    }
+                },
+                testAlert = { done ->
+                    requestGuardPermissions()
+                    lifecycleScope.launch {
+                        done(kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { guardAlerts.test() })
+                    }
+                },
+            )
+            SettingsDialog.show(this, settings, family, guard) {
                 face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
                 checkBrain()
                 updatePresence()
+                requestGuardPermissions()
             }
         }
     }
@@ -415,6 +455,19 @@ class MainActivity : AppCompatActivity() {
         if (android.os.Build.VERSION.SDK_INT >= 30) android.os.Environment.isExternalStorageManager()
         else ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
 
+    /** SMS і дзвінок для сторожа — дозвіл питаємо, коли номер заповнено. */
+    private fun requestGuardPermissions() {
+        val wanted = listOfNotNull(
+            Manifest.permission.SEND_SMS.takeIf { settings.guardSmsNumber.isNotBlank() },
+            Manifest.permission.CALL_PHONE.takeIf { settings.guardCallNumber.isNotBlank() },
+        ).filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (wanted.isNotEmpty()) guardPermissions.launch(wanted.toTypedArray())
+    }
+
+    private val guardPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.any { !it }) toast("Без дозволу сторож не надішле SMS / не подзвонить")
+    }
+
     private val calendarPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) toast("Без дозволу Спіді не записує в календар")
     }
@@ -447,6 +500,25 @@ class MainActivity : AppCompatActivity() {
     }
     private var nightMode = false
 
+    private val guardAlerts by lazy { com.speedy.assistant.guard.Alerts(this, http, settings) }
+    private var guardMode: com.speedy.assistant.guard.GuardMode? = null
+    private var guardOn = false
+    /** Іде урок — камера присутності й під час "зайнятості" (хто відповідає: дитина чи дорослий). */
+    private var lessonMode = false
+
+    /** Сторож: екран майже згаслий (Спіді "спить"), камерою й мікрофоном володіє сторож. */
+    private fun setGuardMode(on: Boolean) {
+        guardOn = on
+        window.attributes = window.attributes.apply {
+            screenBrightness = when {
+                on || nightMode -> 0.01f
+                BuildConfig.SCREEN_BRIGHTNESS >= 0f -> BuildConfig.SCREEN_BRIGHTNESS
+                else -> WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+        }
+        updatePresence()
+    }
+
     /** Нічний режим: екран майже згаслий, камера вимкнена (слухаємо лише хропіння). */
     private fun setNightMode(on: Boolean) {
         nightMode = on
@@ -465,7 +537,7 @@ class MainActivity : AppCompatActivity() {
         val watcher = presence ?: return
         val cameraAllowed = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
-        if (settings.presenceEnabled && cameraAllowed && resumed && !assistantBusy && !lowPower && !nightMode) watcher.start()
+        if (settings.presenceEnabled && cameraAllowed && resumed && (!assistantBusy || lessonMode) && !lowPower && !nightMode && !guardOn) watcher.start()
         else watcher.stop()
     }
 
@@ -490,6 +562,7 @@ class MainActivity : AppCompatActivity() {
         hideMiniSpeedy()
         hideSystemUi()
         assistant?.start()
+        guardMode?.resume()
         resumed = true
         updatePresence()
     }
@@ -562,6 +635,7 @@ class MainActivity : AppCompatActivity() {
         }
         assistant?.release()
         presence?.release()
+        guardMode?.release()
         speaker?.shutdown()
         super.onDestroy()
     }

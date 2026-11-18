@@ -29,7 +29,13 @@ object SettingsDialog {
         val resetLimit: () -> Unit,
     )
 
-    fun show(context: Context, settings: AppSettings, family: Family? = null, onSaved: () -> Unit) {
+    /** Режим сторожа: пошук chat id Telegram-бота і пробна тривога (обидва — у фоні, відповідь — у [done]). */
+    class Guard(
+        val findTelegramChat: (token: String, done: (String?) -> Unit) -> Unit,
+        val testAlert: (done: (String) -> Unit) -> Unit,
+    )
+
+    fun show(context: Context, settings: AppSettings, family: Family? = null, guard: Guard? = null, onSaved: () -> Unit) {
         val pad = (16 * context.resources.displayMetrics.density).toInt()
         val form = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -82,6 +88,11 @@ object SettingsDialog {
             isChecked = settings.appearanceEnabled
         }
         form.addView(appearance)
+        val facts = CheckBox(context).apply {
+            text = "Інколи розповідати цікаві факти (під інтереси, не частіше ніж раз на 3 год)"
+            isChecked = settings.factsEnabled
+        }
+        form.addView(facts)
 
         label("Вібрація")
         fun vibe(text: String, on: Boolean) = CheckBox(context).apply { this.text = text; isChecked = on; form.addView(this) }
@@ -129,6 +140,71 @@ object SettingsDialog {
             tag = Runnable { refresh() }
         }
         form.addView(usage)
+        label("— Режим сторожа («Спіді, вартуй») —")
+        form.addView(TextView(context).apply {
+            text = "Тривогу надсилаю всіма заповненими каналами. Telegram: створи бота в @BotFather, встав токен, " +
+                "напиши боту будь-що й натисни «Знайти chat id». Пошта: для Gmail — smtp.gmail.com, 465 і «пароль застосунку»."
+            textSize = 12f
+        })
+        label("Telegram: токен бота")
+        val tgToken = field(settings.guardTelegramToken, "123456:ABC…", secret = true)
+        label("Telegram: chat id")
+        val tgChat = field(settings.guardTelegramChat, "напиши боту — і «Знайти»")
+        form.addView(android.widget.Button(context).apply {
+            text = "Знайти chat id"
+            isAllCaps = false
+            setOnClickListener {
+                text = "Шукаю…"
+                guard?.findTelegramChat?.invoke(tgToken.text.toString()) { id ->
+                    text = "Знайти chat id"
+                    if (id != null) tgChat.setText(id)
+                    else android.widget.Toast.makeText(context, "Не знайшла: перевір токен і напиши боту ще раз", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        })
+        label("Пошта: сервер SMTP і порт (465 — SSL, 587 — STARTTLS)")
+        val smtpHost = field(settings.guardSmtpHost, "smtp.gmail.com")
+        val smtpPort = field(settings.guardSmtpPort.toString(), "465").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        label("Пошта: логін (з якої) і пароль застосунку")
+        val smtpUser = field(settings.guardSmtpUser, "you@gmail.com")
+        val smtpPass = field(settings.guardSmtpPassword, "пароль застосунку", secret = true)
+        label("Пошта: кому")
+        val emailTo = field(settings.guardEmailTo, "you@gmail.com")
+        label("SMS на номер (лише текст)")
+        val smsNumber = field(settings.guardSmsNumber, "+380…").apply { inputType = InputType.TYPE_CLASS_PHONE }
+        label("Дзвінок на номер (почуєш кімнату)")
+        val callNumber = field(settings.guardCallNumber, "+380…").apply { inputType = InputType.TYPE_CLASS_PHONE }
+        val guardSounds = CheckBox(context).apply { text = "тривога на звуки: чужий голос, двері, стук, скло, сирена"; isChecked = settings.guardSounds; form.addView(this) }
+        val guardMotion = CheckBox(context).apply { text = "тривога на рух, у якому нікого не видно"; isChecked = settings.guardMotion; form.addView(this) }
+        label("Хвилин між тривогами")
+        val cooldown = field(settings.guardCooldownMinutes.toString(), "5").apply { inputType = InputType.TYPE_CLASS_NUMBER }
+        fun saveGuard() {
+            settings.guardTelegramToken = tgToken.text.toString()
+            settings.guardTelegramChat = tgChat.text.toString()
+            settings.guardSmtpHost = smtpHost.text.toString()
+            settings.guardSmtpPort = smtpPort.text.toString().toIntOrNull() ?: settings.guardSmtpPort
+            settings.guardSmtpUser = smtpUser.text.toString()
+            settings.guardSmtpPassword = smtpPass.text.toString()
+            settings.guardEmailTo = emailTo.text.toString()
+            settings.guardSmsNumber = smsNumber.text.toString()
+            settings.guardCallNumber = callNumber.text.toString()
+            settings.guardSounds = guardSounds.isChecked
+            settings.guardMotion = guardMotion.isChecked
+            settings.guardCooldownMinutes = cooldown.text.toString().toIntOrNull() ?: settings.guardCooldownMinutes
+        }
+        if (guard != null) form.addView(android.widget.Button(context).apply {
+            text = "Надіслати пробну тривогу"
+            isAllCaps = false
+            setOnClickListener {
+                saveGuard() // пробуємо саме те, що введено
+                text = "Надсилаю…"
+                guard.testAlert { result ->
+                    text = "Надіслати пробну тривогу"
+                    android.widget.Toast.makeText(context, result, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        })
+
         // Налаштування вже відкрито за PIN — новий одразу (двічі; можна й голосом).
         form.addView(android.widget.Button(context).apply {
             text = "Змінити PIN"
@@ -156,6 +232,8 @@ object SettingsDialog {
                 family?.names?.zip(childBoxes)?.forEach { (name, box) -> family.setChild(name, box.isChecked) }
                 family?.let { f -> genders.forEach { (name, g) -> if (g != com.speedy.assistant.people.Gender.UNKNOWN && g != f.gender(name)) f.setGender(name, g) } }
                 settings.appearanceEnabled = appearance.isChecked
+                settings.factsEnabled = facts.isChecked
+                saveGuard()
                 onSaved()
             }
             .setNegativeButton("Скасувати", null)

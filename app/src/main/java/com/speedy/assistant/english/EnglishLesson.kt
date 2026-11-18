@@ -8,6 +8,8 @@ interface LessonIO {
     suspend fun listen(english: Boolean): Heard?
     suspend fun cheer()
     suspend fun oops()
+    /** Малюнок на екрані (очі меншають і йдуть угору); null — прибрати. */
+    suspend fun show(picture: List<List<String>>?) {}
 }
 
 /**

@@ -5,7 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 data class AgentAction(
-    /** none | look | move | stop | search | command */
+    /** none | look | listen | move | stop | search | command */
     val type: String = "none",
     /** none | forward (фронтальна, з боку очей) | backward (задня) */
     val camera: String = "none",
@@ -69,7 +69,7 @@ data class AgentReply(
                 .put("type", "object")
                 .put(
                     "properties", JSONObject()
-                        .put("type", enumOf("none", "look", "move", "stop", "search", "command"))
+                        .put("type", enumOf("none", "look", "listen", "move", "stop", "search", "command"))
                         .put("camera", enumOf("none", "forward", "backward", "both"))
                         .put("direction", enumOf("none", "forward", "backward", "left", "right"))
                         .put("duration_ms", JSONObject().put("type", "integer"))
@@ -102,7 +102,7 @@ data class AgentReply(
                 .put("type", "OBJECT")
                 .put(
                     "properties", JSONObject()
-                        .put("type", enumOf("none", "look", "move", "stop", "search", "command"))
+                        .put("type", enumOf("none", "look", "listen", "move", "stop", "search", "command"))
                         .put("camera", enumOf("none", "forward", "backward", "both"))
                         .put("direction", enumOf("none", "forward", "backward", "left", "right"))
                         .put("duration_ms", JSONObject().put("type", "INTEGER"))

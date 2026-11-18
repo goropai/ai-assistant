@@ -55,6 +55,8 @@ class Brain(
         image: ByteArray? = null,
         /** Додаткові кадри (напр. задня камера разом із передньою). */
         extraImages: List<ByteArray> = emptyList(),
+        /** Звук навколо (WAV) — для "listen". */
+        audio: ByteArray? = null,
         onMood: (String) -> Unit = {},
         onSentence: ((String) -> Unit)? = null,
     ): AgentReply {
@@ -63,6 +65,7 @@ class Brain(
         val parts = buildList {
             image?.let { add(Part.Image(it)) }
             extraImages.forEach { add(Part.Image(it)) }
+            audio?.let { add(Part.Audio(it)) }
             val nearby = presence().takeIf { it.isNotBlank() }?.let { " [поруч: $it]" }.orEmpty()
             val known = about().takeIf { it.isNotBlank() }?.let { " [про співрозмовника: $it]" }.orEmpty()
             val sees = scene().takeIf { it.isNotBlank() }?.let { " [бачу: $it]" }.orEmpty()
@@ -86,6 +89,17 @@ class Brain(
     }
 
     fun reset() = history.clear()
+
+    /** Спіді сама щось розповіла (цікавий факт) — у розмову, щоб "а чому?" мало контекст. */
+    fun noteSaid(said: String) {
+        if (now() - lastAsk > conversationGapMs) history.clear()
+        lastAsk = now()
+        history += Turn(Role.USER, listOf(Part.Text("[система] Ти сама вирішила поділитися цікавим фактом.")))
+        history += Turn(Role.ASSISTANT, listOf(Part.Text(
+            """{"mood": "happy", "say": ${org.json.JSONObject.quote(said)}, "action": {"type": "none"}, "remember": ""}""",
+        )))
+        trim()
+    }
 
     private fun systemPrompt(): String {
         val facts = memory()
@@ -118,6 +132,12 @@ class Brain(
             {"mood": "neutral", "say": "...", "action": {"type": "none", "camera": "none", "direction": "none",
              "duration_ms": 0, "then_look": false, "query": ""}, "remember": ""}
         """.trimIndent()
+
+        fun listenFollowUp(seconds: Int) =
+            "[система] Ось $seconds с звуку навколо тебе. Що чути? Якщо музика — спробуй упізнати пісню й виконавця. " +
+                "Не вигадуй: чуєш лише шум чи розмову — так і скажи; не впізнала — скажи чесно й опиши, що чуєш. " +
+                "Шукати в інтернеті — лише за розібраними словами пісні (пошук за описом звуку не допоможе). " +
+                "Відповідай голосом, коротко."
 
         fun searchFollowUp(query: String, result: String?) =
             if (result == null) "[система] Пошук \"$query\" не вдався. Чесно скажи, що не змогла знайти, і відповідай з того, що знаєш."
@@ -171,6 +191,11 @@ class Brain(
               кімната за твоєю спиною, тобто те, що співрозмовник бачить перед собою; "both" — обидві разом.
               "forward" — "хто я", "що це в мене в руках"; "backward" — "що там позаду тебе", "що за вікном",
               "подивись на кімнату"; "both" — "що навколо", "роздивись усе". Отримаєш фото і відповіси ще раз.
+              Людина щось показує ("ось дивись", "глянь", "подивись сюди") — "both": вона може тримати телефон
+              у руках і навести на це задню камеру; дивись на той кадр, де показане.
+            - "listen": послухати звук навколо (duration_ms 3000–10000, зазвичай 8000) і отримати запис —
+              "що це за пісня?", "послухай", "що це гуде?"; коли говорять про музику, що грає, і просять
+              упізнати — можна разом із "look" (спершу подивись, потім послухай). Отримаєш звук і відповіси ще раз.
             - "move": поїхати (direction forward/backward/left/right, duration_ms до 3000; left/right —
               поворот на місці). then_look=true — після руху отримаєш новий кадр спереду і звіт датчика,
               щоб вирішити наступний крок. Так виконуй завдання на кшталт "під'їдь до кота", "знайди м'яч":
@@ -190,6 +215,9 @@ class Brain(
               відео з інтернету: "знайди на ютубі <що>" (відкриє YouTube чи NewPipe; відео, якого немає в
                 телефоні, — теж туди);
               англійська: "урок англійської", "мій прогрес в англійській";
+              інші уроки для дитини: "урок математики", "урок логіки", "урок про навколишній світ", "математика англійською",
+                "урок української мови", "урок історії";
+                урок для іншої людини — з її ім'ям: "урок математики для <ім'я>";
               нагадування й час: "нагадай о ГГ:ХХ <що>", "нагадай через N хвилин <що>", "які в мене нагадування",
                 "постав будильник на ГГ:ХХ", "постав таймер на N хвилин|секунд|годин", "котра година";
               календар: "що в мене сьогодні в календарі", "запиши в календар <що> <завтра|у п'ятницю|21 грудня> о ГГ:ХХ";
@@ -213,11 +241,11 @@ class Brain(
 
             Відповідай ЛИШЕ JSON-об'єктом такого вигляду:
             {"mood": "neutral|happy|sad|angry|surprised|sleepy|thinking|listening", "say": "що промовити",
-             "action": {"type": "none|look|move|stop|search|command", "camera": "none|forward|backward|both",
+             "action": {"type": "none|look|listen|move|stop|search|command", "camera": "none|forward|backward|both",
                         "direction": "none|forward|backward|left|right", "duration_ms": 0, "then_look": false,
                         "query": ""},
              "remember": ""}
-            Для "look", "search" і проміжних кроків руху поле "say" — дуже коротке ("Гляну!", "Ще трохи…") або порожнє.
+            Для "look", "listen", "search" і проміжних кроків руху поле "say" — дуже коротке ("Гляну!", "Ще трохи…") або порожнє.
             Настрій (mood) обирай відповідно до змісту — він відображається твоїми очима.
         """.trimIndent()
     }

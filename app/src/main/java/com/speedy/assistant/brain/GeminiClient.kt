@@ -254,6 +254,13 @@ class GeminiClient(
                             .put("data", Base64.encodeToString(part.jpeg, Base64.NO_WRAP))
                     )
                 )
+                is Part.Audio -> parts.put(
+                    JSONObject().put(
+                        "inline_data", JSONObject()
+                            .put("mime_type", "audio/wav")
+                            .put("data", Base64.encodeToString(part.wav, Base64.NO_WRAP))
+                    )
+                )
             }
         }
         return JSONObject()

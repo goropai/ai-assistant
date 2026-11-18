@@ -104,6 +104,19 @@ class Assistant(
     private val nightLog: com.speedy.assistant.night.NightLog? = null,
     /** Увімкнули / вимкнули нічний режим — приглушити екран, вимкнути камеру. */
     private val onNight: (Boolean) -> Unit = {},
+    /** Режим сторожа: камери й мікрофон стежать, тривога — у Telegram, пошту, SMS, дзвінком. */
+    private val guard: com.speedy.assistant.guard.GuardMode? = null,
+    private val guardAlerts: com.speedy.assistant.guard.Alerts? = null,
+    /** Сторож увімкнено / вимкнено (екран, камера присутності). */
+    private val onGuard: (Boolean) -> Unit = {},
+    /** Іде урок: камера присутності працює й під час "зайнятості" (хто відповідає). */
+    private val onLesson: (Boolean) -> Unit = {},
+    /** Записати кілька секунд звуку навколо ("що це за пісня?"); null — мікрофон зайнятий. */
+    private val recordSound: suspend (seconds: Int) -> com.speedy.assistant.voice.SoundClip.Clip? = { null },
+    /** Запит до "мозку" за JSON (уроки, цікаві факти); null — не вдалось. */
+    private val generateJson: suspend (system: String, prompt: String) -> String? = { _, _ -> null },
+    /** Прогрес уроків математики, логіки тощо. */
+    private val school: com.speedy.assistant.school.SchoolProgress? = null,
     earsFactory: (onPhrase: (List<String>) -> Unit) -> VoiceListener,
     /** true — Спіді зайнята (камера потрібна для фото), false — вільна. */
     private val onBusyChanged: (Boolean) -> Unit = {},
@@ -193,10 +206,77 @@ class Assistant(
 
     /** Раз на хвилину: чи не хочеться чогось (на зарядку, уваги). */
     fun checkDesires(hour: Int, someoneNear: Boolean, batteryPercent: Int, charging: Boolean) {
-        if (busy || night?.active == true) return
+        if (busy || quiet()) return
+        if (maybeTellFact(hour)) return
         val wish = desires.check(SystemClock.uptimeMillis(), hour, someoneNear, lastInteraction, batteryPercent, charging)
             ?: return
         chirp(wish, if (wish == Chirp.LOW_BATTERY) Mood.SLEEPY else Mood.HAPPY)
+    }
+
+    /** Цікавий факт: розказала — чекаємо реакції (ім'я, тема, до коли). */
+    private var factPending: Triple<String, String, Long>? = null
+
+    /**
+     * Час від часу (не частіше ніж раз на 3 год для людини) — цікавий факт тому, хто поруч, коли Спіді
+     * не розмовляє: під інтереси з профілю, іноді — з нової галузі. Реакцію запам'ятовуємо.
+     */
+    private fun maybeTellFact(hour: Int): Boolean {
+        if (settings?.factsEnabled == false || hour !in 9..20 || !isOnline()) return false
+        val now = SystemClock.uptimeMillis()
+        if (now - lastInteraction < FACT_IDLE_MS || Math.random() > FACT_CHANCE) return false
+        val name = people?.presentNames(now)?.singleOrNull() ?: return false
+        val p = profiles ?: return false
+        if (!p.factDue(name, System.currentTimeMillis())) return false
+        runBusy { tellFact(name) }
+        return true
+    }
+
+    private suspend fun tellFact(name: String, sameTopic: String? = null) {
+        val p = profiles ?: return
+        val (liked, disliked, told) = p.interests(name)
+        val explore = sameTopic == null && (liked.isEmpty() || Math.random() < FACT_EXPLORE)
+        val child = p.age(name) == com.speedy.assistant.people.Profiles.Age.CHILD
+        val about = p.summary(name, System.currentTimeMillis()) + (sameTopic?.let { "; хоче ще про: $it" }.orEmpty())
+        val fact = generateJson(com.speedy.assistant.initiative.Facts.SYSTEM,
+            com.speedy.assistant.initiative.Facts.prompt(about, child, if (sameTopic != null) listOf(sameTopic) else liked, disliked, told, explore))
+            ?.let { com.speedy.assistant.initiative.Facts.parse(it) } ?: return
+        Log.i(TAG, "цікавий факт для $name (${fact.topic}${if (explore) ", нова галузь" else ""})")
+        p.factTold(name, fact.topic, fact.text, System.currentTimeMillis())
+        face.setMood(Mood.HAPPY)
+        val text = if (sameTopic != null) fact.text else "$name, а знаєш? ${fact.text}"
+        say(text)
+        brain.noteSaid(text)
+        // Відповідь ("ого!", "нудно", "а чому?") — без "Спіді".
+        val until = SystemClock.uptimeMillis() + FACT_REACTION_MS
+        factPending = Triple(name, fact.topic, until)
+        awaitingCommandUntil = maxOf(awaitingCommandUntil, until)
+        inConversation = true
+    }
+
+    /** Реакція на щойно розказаний факт; true — оброблено (далі як звичайну репліку не беремо). */
+    private fun factReaction(candidates: List<String>): Boolean {
+        val (name, topic, until) = factPending ?: return false
+        factPending = null
+        if (SystemClock.uptimeMillis() > until) return false
+        val reaction = candidates.firstOrNull()?.let { com.speedy.assistant.initiative.Facts.reaction(it) } ?: return false
+        Log.i(TAG, "реакція на факт ($topic): $reaction")
+        when (reaction) {
+            com.speedy.assistant.initiative.Facts.Reaction.LIKED -> {
+                profiles?.factReaction(name, topic, liked = true)
+                return false // "ого, а чому?" — хай модель продовжить розмову
+            }
+            com.speedy.assistant.initiative.Facts.Reaction.MORE -> {
+                profiles?.factReaction(name, topic, liked = true)
+                runBusy { tellFact(name, sameTopic = topic) }
+            }
+            com.speedy.assistant.initiative.Facts.Reaction.DISLIKED -> {
+                profiles?.factReaction(name, topic, liked = false)
+                awaitingCommandUntil = 0
+                inConversation = false
+                runBusy { face.setMood(Mood.NEUTRAL); say("Добре, запам'ятаю.") }
+            }
+        }
+        return true
     }
 
     /** Тиха перевірка після запуску: говоримо лише тоді, коли знайшлася нова версія. */
@@ -222,7 +302,7 @@ class Assistant(
     fun onPresence(events: List<PresenceEvent>) {
         events.filter { it !is PresenceEvent.Look }.takeIf { it.isNotEmpty() }
             ?.let { Log.i(TAG, "присутність: $it${if (busy) " (зайнята — пропускаю)" else ""}") }
-        if (busy) return
+        if (busy || guard?.on == true) return
         // Обличчя важливіші за загальне "хтось прийшов": вітаємо на ім'я або знайомимось.
         events.firstOrNull { it is PresenceEvent.Recognized }?.let { event ->
             pendingStranger?.cancel() // упізнала — "як тебе звати?" вже не питаємо
@@ -488,6 +568,8 @@ class Assistant(
      */
     fun manualWake() {
         buzzer?.touch()
+        // Сторож: дотик — вимкнення (знайомий у кадрі — одразу, інакше PIN).
+        if (guard?.on == true) return requestDisarm()
         // Дзвонить будильник чи таймер — дотик його вимикає (голосом під сигнал на J5 не чути).
         if (ears.ringing && phone?.stopAlarm(snooze = false) == true) {
             if (busy) interrupt()
@@ -518,6 +600,12 @@ class Assistant(
         // Йде урок і Спіді чекає відповіді — це вона.
         lessonAnswer?.let { if (it.complete(candidates)) return }
         if (busy) return
+        // Сторож: чуємо лише "досить вартувати" (від знайомого в кадрі — інакше PIN), решту — ні.
+        if (guard?.on == true) {
+            if (candidates.any { com.speedy.assistant.guard.GuardCommands.parse(it) == false }) requestDisarm()
+            return
+        }
+        if (factReaction(candidates)) return
         // Дзвонить будильник: під сигнал фраза розпізнається криво — досить уламка ("будник", "стоп").
         if (ears.ringing) candidates.firstNotNullOfOrNull { LocalCommands.whileRinging(it) }?.let { cmd ->
             lastInteraction = SystemClock.uptimeMillis()
@@ -664,6 +752,8 @@ class Assistant(
     fun debugHear(text: String) {
         if (com.speedy.assistant.settings.PinDialog.hear(listOf(text))) { Log.i(TAG, "debug: PIN у віконце"); return }
         Log.i(TAG, "debug: \"$text\"")
+        // Урок чекає відповіді — це вона (як і з мікрофона).
+        lessonAnswer?.let { if (it.complete(listOf(text))) return }
         if (busy) interrupt()
         scope.launch {
             while (busy) delay(100)
@@ -707,7 +797,7 @@ class Assistant(
                 // Спитала й чекає відповіді — слухаємо одразу, щоб не обрізати початок фрази.
                 // Увімкнула аудіо у VLC — не слухаємо (mediaTick увімкне слух, коли замовкне).
                 if (playback?.playingAudio == true) mutedForMedia = true
-                else if (night?.active != true) ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
+                else if (micFree()) ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
                 scheduleIdle()
             }
         }
@@ -723,6 +813,12 @@ class Assistant(
     }
 
     private suspend fun handle(command: String) {
+        when (com.speedy.assistant.guard.GuardCommands.parse(command)) {
+            true -> return armGuard()
+            false -> return if (guard?.on == true) requestDisarm() else say("Я зараз не вартую.")
+            null -> {}
+        }
+        com.speedy.assistant.school.SchoolCommands.parse(command)?.let { return schoolLesson(it, command) }
         val cmd = LocalCommands.match(command)
         when (cmd) {
             LocalCommand.STOP -> {
@@ -756,10 +852,10 @@ class Assistant(
                 say("Спершу введи або скажи поточний PIN, а потім — новий двічі.")
                 return openAccessSettings("pin")
             }
-            LocalCommand.ENGLISH_LESSON -> return englishLesson()
+            LocalCommand.ENGLISH_LESSON -> return englishLesson(command)
             LocalCommand.ENGLISH_PLACEMENT -> {
-                english?.progress?.resetLevel(partner() ?: "гість")
-                return englishLesson()
+                english?.progress?.resetLevel(learnerFor(command))
+                return englishLesson(command)
             }
             LocalCommand.AGE_ADULT -> {
                 // Інакше дитина скаже "я дорослий" й обійде ліміт.
@@ -970,6 +1066,20 @@ class Assistant(
                     Log.i(TAG, "пошук \"${action.query}\": ${if (found == null) "нічого" else "${found.length} симв."} за ${SystemClock.uptimeMillis() - started} мс")
                     reply = ask(Brain.searchFollowUp(action.query, found))
                 }
+                "listen" -> {
+                    if (looks++ >= MAX_LOOKS) return speak(reply)
+                    if (reply.say.isNotBlank()) speak(reply)
+                    face.setMood(Mood.LISTENING)
+                    val seconds = (action.durationMs.takeIf { it > 0 } ?: 8_000L).coerceIn(3_000, 10_000).toInt() / 1000
+                    delay(VoiceListener.UNMUTE_DELAY_MS) // розпізнавач має відпустити мікрофон
+                    val clip = recordSound(seconds) ?: return say("Не вийшло послухати — мікрофон зайнятий.")
+                    Log.i(TAG, "слухаю звук: $seconds с, ${clip.wav.size / 1024} КБ, гучність ${clip.rms.toInt()}, " +
+                        "не тло ${clip.soundWindows} вікон, класи ${clip.topClasses}")
+                    // Тиша — моделі нічого не надсилаємо.
+                    if (!clip.audible) { face.setMood(Mood.NEUTRAL); return say("Я нічого не чую — навколо тихо.") }
+                    face.setMood(Mood.THINKING)
+                    reply = ask(Brain.listenFollowUp(seconds), audio = clip.wav)
+                }
                 "look" -> {
                     if (looks++ >= MAX_LOOKS) return speak(reply)
                     if (reply.say.isNotBlank()) speak(reply)
@@ -1054,6 +1164,7 @@ class Assistant(
         }
         com.speedy.assistant.phone.EventParser.parse(command, System.currentTimeMillis())?.let { addCalendarEvent(it); return true }
         com.speedy.assistant.night.NightCommands.parse(command)?.let { handleNight(it); return true }
+        com.speedy.assistant.school.SchoolCommands.parse(command)?.let { schoolLesson(it, command); return true }
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return true }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return true }
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return true }
@@ -1092,7 +1203,7 @@ class Assistant(
     fun remind(r: com.speedy.assistant.initiative.Reminder, late: Boolean = false) {
         // Тиша (ніч чи нічний режим) — лише вібрація; уголос — після дотику.
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        if (settings?.vibrateQuiet == true && (night?.active == true || hour < 8 || hour >= 22)) {
+        if (settings?.vibrateQuiet == true && (quiet() || hour < 8 || hour >= 22) || guard?.on == true) {
             quietReminders += r
             buzzer?.quietReminder()
             Log.i(TAG, "нагадування в тиші — вібрація: ${r.text}")
@@ -1136,22 +1247,26 @@ class Assistant(
     private var lessonAnswer: kotlinx.coroutines.CompletableDeferred<List<String>>? = null
 
     /** Урок англійської: учень — той, кого Спіді бачить (рівень і прогрес у кожного свої). */
-    private suspend fun englishLesson() {
+    /**
+     * Для кого урок: названий у команді знайомий ("навчи Ліну англійської" — дорослий просить для дитини),
+     * інакше — той, хто говорить / кого бачимо.
+     */
+    private fun learnerFor(command: String): String =
+        com.speedy.assistant.school.Learner.named(command) { people?.findName(it) } ?: partner() ?: "гість"
+
+    /** Урок для іншої людини, ніж та, що попросила, — звернутися до неї. */
+    private suspend fun greetLearner(name: String) {
+        if (name != "гість" && name != partner()) say("$name, починаємо урок!")
+    }
+
+    private suspend fun englishLesson(command: String = "") {
         val course = english ?: return say("Я поки не вмію вчити англійської.")
         if (!isOnline()) return say("Для уроку англійської потрібен інтернет: англійську я чую через Google.")
-        val name = partner() ?: "гість"
+        val name = learnerFor(command)
+        greetLearner(name)
         Log.i(TAG, "урок англійської: $name")
         inConversation = false
-        val io = object : com.speedy.assistant.english.LessonIO {
-            override suspend fun say(uk: String) = this@Assistant.say(uk)
-            override suspend fun sayEnglish(en: String) {
-                face.setSpeaking(true)
-                try { voice.speak(en, english = true) } finally { face.setSpeaking(false) }
-            }
-            override suspend fun listen(english: Boolean) = listenLesson(english)
-            override suspend fun cheer() { face.setMood(Mood.HAPPY); buzzer?.cheer(); chirps.play(Chirp.HAPPY) }
-            override suspend fun oops() { face.setMood(Mood.THINKING) }
-        }
+        val io = lessonIO()
         // Вік: профіль (сказане вголос / голос / явно дитяче обличчя), інакше — голос щойно почутої фрази.
         val child = when (profiles?.age(name)) {
             com.speedy.assistant.people.Profiles.Age.CHILD -> true
@@ -1164,15 +1279,88 @@ class Assistant(
             now = { System.currentTimeMillis() }, extra = course.store, generate = course.generate, child = child,
         )
         val lessonStart = System.currentTimeMillis()
-        lesson.run()
+        lessonFor = name to (child == true)
+        onLesson(true)
+        try {
+            lesson.run()
+        } finally {
+            lessonFor = null
+            onLesson(false)
+        }
         if (child == true || childSpeaking()) childLimit?.add(name, System.currentTimeMillis() - lessonStart, System.currentTimeMillis())
         Log.i(TAG, "урок англійської завершено ($name, рівень ${course.progress.learner(name).level}): ${lesson.result}")
         face.setMood(Mood.HAPPY)
     }
 
+    private fun lessonIO() = object : com.speedy.assistant.english.LessonIO {
+        override suspend fun say(uk: String) = this@Assistant.say(uk)
+        override suspend fun sayEnglish(en: String) {
+            face.setSpeaking(true)
+            try { voice.speak(en, english = true) } finally { face.setSpeaking(false) }
+        }
+        override suspend fun listen(english: Boolean) = listenLesson(english)
+        override suspend fun cheer() { face.setMood(Mood.HAPPY); buzzer?.cheer(); chirps.play(Chirp.HAPPY) }
+        override suspend fun oops() { face.setMood(Mood.THINKING) }
+        override suspend fun show(picture: List<List<String>>?) = face.showPicture(picture)
+    }
+
+    /** Урок математики, логіки тощо: модель складає під учня (вік, рівень, минулі помилки). */
+    private suspend fun schoolLesson(subject: com.speedy.assistant.school.Subject, command: String = "") {
+        val progress = school ?: return say("Я поки не вмію проводити такі уроки.")
+        if (!isOnline()) return say("Для уроку потрібен інтернет: завдання я складаю разом із моделлю.")
+        val name = learnerFor(command)
+        greetLearner(name)
+        val child = when (profiles?.age(name)) {
+            com.speedy.assistant.people.Profiles.Age.CHILD -> true
+            com.speedy.assistant.people.Profiles.Age.ADULT -> false
+            else -> voiceSaysChild()
+        }
+        val learner = listOfNotNull(
+            name.takeIf { it != "гість" },
+            when (child) { true -> "дитина"; false -> "дорослий"; null -> "вік невідомий (найімовірніше дитина)" },
+            profiles?.summary(name, System.currentTimeMillis())?.takeIf { it.isNotBlank() },
+        ).joinToString("; ")
+        Log.i(TAG, "урок ${subject.ua}: $name, рівень ${progress.level(name, subject)}")
+        inConversation = false
+        val lesson = com.speedy.assistant.school.SchoolLesson(subject, progress, lessonIO(), name, learner, generateJson, now = { System.currentTimeMillis() })
+        val start = System.currentTimeMillis()
+        lessonFor = name to (child != false)
+        onLesson(true)
+        try {
+            lesson.run()
+        } finally {
+            face.showPicture(null) // і коли урок перервали дотиком
+            lessonFor = null
+            onLesson(false)
+        }
+        if (child == true || childSpeaking()) childLimit?.add(name, System.currentTimeMillis() - start, System.currentTimeMillis())
+        Log.i(TAG, "урок ${subject.ua} завершено ($name, рівень ${progress.level(name, subject)}): ${lesson.result}")
+        face.setMood(Mood.HAPPY)
+    }
+
+    /** Учень поточного уроку і чи він дитина. */
+    private var lessonFor: Pair<String, Boolean>? = null
+
+    /**
+     * Урок для дитини, а найближче до камери — знайомий дорослий: відповідає, мабуть, він. Голосом
+     * не розрізнити (Google звук не віддає), тож за обличчям.
+     */
+    private fun adultAnswering(): String? {
+        val (learner, child) = lessonFor ?: return null
+        if (!child) return null
+        val speaker = people?.speaker(SystemClock.uptimeMillis(), ANSWER_FACE_MS) ?: return null
+        return speaker.takeIf { it != learner && profiles?.age(it) == com.speedy.assistant.people.Profiles.Age.ADULT }
+    }
+
     /** Відповідь на уроці: слухаємо одразу (без "Спіді") потрібною мовою, до 9 с. */
     private suspend fun listenLesson(english: Boolean): com.speedy.assistant.english.Heard? {
-        val texts = listenIn(if (english) "en-US" else "uk-UA")
+        var texts = listenIn(if (english) "en-US" else "uk-UA")
+        // Дорослий підказав за дитину — не зараховуємо, слухаємо ще раз.
+        adultAnswering()?.takeIf { texts != null }?.let { adult ->
+            Log.i(TAG, "урок: відповів $adult, а не ${lessonFor?.first} — не зараховую")
+            say("${adult}, хай ${lessonFor?.first} відповість сама.".let { if (lessonFor?.first?.let { n -> profiles?.gender(n) } == com.speedy.assistant.people.Gender.MALE) it.replace("сама", "сам") else it })
+            texts = listenIn(if (english) "en-US" else "uk-UA")
+        }
         Log.d(TAG, "урок почув (${if (english) "en" else "uk"}): $texts, впевненість ${ears.lastConfidence}")
         return texts?.let { com.speedy.assistant.english.Heard(it, ears.lastConfidence) }
     }
@@ -1391,7 +1579,71 @@ class Assistant(
     }
 
     /** Мікрофон вільний для слуху: не грає аудіо у VLC і не слухаємо хропіння. */
-    private fun micFree() = playback?.playingAudio != true && night?.active != true
+    private fun micFree() = playback?.playingAudio != true && night?.active != true && (guard?.on != true || guardListening)
+
+    /** Тиша: нічний режим чи сторож — Спіді нічого не каже сама. */
+    private fun quiet() = night?.active == true || guard?.on == true
+
+    /** Сторож: знайомий поруч — слух увімкнено, щоб почути "досить вартувати". */
+    private var guardListening = false
+    private var guardEarsJob: Job? = null
+
+    /** Камера сторожа впізнала знайомого: слухаємо голос [GUARD_LISTEN_MS] (мікрофон сторож віддав). */
+    fun guardFriend(name: String) {
+        if (guard?.armed != true) return
+        Log.i(TAG, "сторож: $name поруч — слухаю")
+        guardListening = true
+        if (!busy) ears.start()
+        guardEarsJob?.cancel()
+        guardEarsJob = scope.launch {
+            delay(GUARD_LISTEN_MS)
+            while (guard?.friendNear == true) delay(10_000)
+            guardListening = false
+            if (guard?.on == true) {
+                ears.stop()
+                delay(VoiceListener.UNMUTE_DELAY_MS)
+                guard?.reclaimMic()
+            }
+        }
+    }
+
+    private suspend fun armGuard() {
+        val g = guard ?: return say("Я поки не вмію вартувати.")
+        if (g.on) return say("Я вже вартую.")
+        if (night?.active == true) { night?.stop(); onNight(false) }
+        val channels = guardAlerts?.describe().orEmpty()
+        face.setMood(Mood.SURPRISED)
+        say(
+            "Добре, вартую за ${GUARD_DELAY_MS / 1000} секунд. " +
+                (if (channels.isEmpty()) "Куди надсилати тривогу, ще не налаштовано — записуватиму все в телефон. "
+                else "Якщо помічу щось чуже — надішлю в $channels. ") +
+                "Вимкнути — торкнись мене або скажи «досить вартувати», коли я тебе бачу."
+        )
+        inConversation = false
+        awaitingCommandUntil = 0
+        guardListening = false
+        ears.stop()
+        delay(VoiceListener.UNMUTE_DELAY_MS)
+        onGuard(true)
+        g.arm(GUARD_DELAY_MS)
+        face.setMood(Mood.SLEEPY)
+    }
+
+    private suspend fun disarmGuard() {
+        guard?.disarm()
+        guardEarsJob?.cancel()
+        guardListening = false
+        onGuard(false)
+        face.setMood(Mood.HAPPY)
+        say("Добре, більше не вартую.")
+    }
+
+    /** Вимкнути сторожа: знайомий щойно в кадрі — одразу, інакше — PIN батьків. */
+    private fun requestDisarm() {
+        if (guard?.friendNear == true) return runBusy { disarmGuard() }
+        Log.i(TAG, "сторож: вимкнення — за PIN")
+        confirmWithPin { runBusy { disarmGuard() } }
+    }
 
     private suspend fun handleNight(cmd: com.speedy.assistant.night.NightCommand) {
         val watch = night ?: return say("Я поки не вмію слухати вночі.")
@@ -1848,7 +2100,7 @@ class Assistant(
     fun announceNotes() {
         val now = SystemClock.uptimeMillis()
         val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-        if (busy || night?.active == true || now - lastNoteAnnounced < 60_000 || hour < 8 || hour >= 22) return
+        if (busy || quiet() || now - lastNoteAnnounced < 60_000 || hour < 8 || hour >= 22) return
         val fresh = com.speedy.assistant.phone.NotificationStore.notes.unread()
             .filterNot { com.speedy.assistant.phone.Safety.blocked("", it.app) }
         if (fresh.isEmpty()) return
@@ -2042,7 +2294,7 @@ class Assistant(
      * Потоковий запит: кожне готове речення відповіді одразу йде в мовлення, поки модель
      * дописує решту; настрій — щойно відомий. У лог — затримка до першого слова й загальна.
      */
-    private suspend fun ask(text: String, image: ByteArray? = null, extraImages: List<ByteArray> = emptyList()): AgentReply = coroutineScope {
+    private suspend fun ask(text: String, image: ByteArray? = null, extraImages: List<ByteArray> = emptyList(), audio: ByteArray? = null): AgentReply = coroutineScope {
         val started = SystemClock.uptimeMillis()
         var firstWord = 0L
         val sentences = Channel<String>(Channel.UNLIMITED)
@@ -2055,7 +2307,7 @@ class Assistant(
         val reply = try {
             askBrain {
                 brain.ask(
-                    text, image, extraImages,
+                    text, image, extraImages, audio,
                     onMood = { mood -> launch { face.setMood(Mood.parse(mood)) } },
                     onSentence = { sentences.trySend(it) },
                 )
@@ -2230,6 +2482,18 @@ class Assistant(
         const val RECENT_KNOWN_MS = 5 * 60_000L
         /** "Привіт" знову — лише якщо не було контакту довше. */
         const val GREET_AGAIN_MS = 3 * 3600_000L
+        /** Сторож вмикається не одразу — встигнути вийти з кімнати. */
+        const val GUARD_DELAY_MS = 30_000L
+        /** Обличчя біля камери не старше — щоб вирішити, хто відповів на уроці. */
+        const val ANSWER_FACE_MS = 4_000L
+        /** Цікавий факт: лише коли розмови не було стільки, з такою ймовірністю на хвилину. */
+        const val FACT_IDLE_MS = 5 * 60_000L
+        const val FACT_CHANCE = 0.15
+        /** Частка фактів з нової галузі (коли інтереси вже відомі). */
+        const val FACT_EXPLORE = 0.3
+        const val FACT_REACTION_MS = 25_000L
+        /** Скільки слухаємо голос, коли сторож побачив знайомого. */
+        const val GUARD_LISTEN_MS = 60_000L
         /** Відбиток голосу діє для фрази й відповіді на неї. */
         const val VOICE_FRESH_MS = 30_000L
         private val CLAIM = Regex("(?:^|[\\s,])я\\s+(\\p{L}[\\p{L}'’-]+)")

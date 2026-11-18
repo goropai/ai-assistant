@@ -49,6 +49,11 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         var appearanceAt: Long = 0,
         /** День народження: "MM-dd" або "yyyy-MM-dd". */
         var birthday: String? = null,
+        /** Теми цікавих фактів, що сподобались / не зацікавили (з реакції), і недавно розказані. */
+        val liked: MutableList<String> = mutableListOf(),
+        val disliked: MutableList<String> = mutableListOf(),
+        val toldFacts: MutableList<String> = mutableListOf(),
+        var lastFactAt: Long = 0,
     ) {
         /** Скільки не було контакту перед поточною появою (для "привіт" чи "ти знову тут"); не зберігається. */
         var returnGapMs: Long = Long.MAX_VALUE
@@ -159,6 +164,37 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         return b.endsWith("%02d-%02d".format(cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH)))
     }
 
+    /** Пора розповісти цікавий факт: не частіше ніж раз на [FACT_GAP_MS]. */
+    @Synchronized
+    fun factDue(name: String, now: Long): Boolean = (people[name]?.lastFactAt ?: 0).let { it == 0L || now - it >= FACT_GAP_MS }
+
+    /** Розказала факт на тему [topic] (сам факт коротко — щоб не повторюватись). */
+    @Synchronized
+    fun factTold(name: String, topic: String, fact: String, now: Long) {
+        val p = people.getOrPut(name) { Profile(firstSeen = now) }
+        p.lastFactAt = now
+        p.toldFacts += "$topic: ${fact.take(80)}"
+        while (p.toldFacts.size > MAX_TOLD) p.toldFacts.removeAt(0)
+        save()
+    }
+
+    /** Реакція на факт: тема — до вподобань або до нецікавого (і навпаки прибирається). */
+    @Synchronized
+    fun factReaction(name: String, topic: String, liked: Boolean) {
+        val p = people[name] ?: return
+        val t = topic.trim().lowercase().take(40)
+        (if (liked) p.disliked else p.liked).removeAll { it == t }
+        val list = if (liked) p.liked else p.disliked
+        if (t !in list) list += t
+        while (list.size > MAX_TOPICS) list.removeAt(0)
+        save()
+    }
+
+    /** Що відомо про інтереси — для вибору факту. */
+    @Synchronized
+    fun interests(name: String): Triple<List<String>, List<String>, List<String>> =
+        people[name]?.let { Triple(it.liked.toList(), it.disliked.toList(), it.toldFacts.toList()) } ?: Triple(emptyList(), emptyList(), emptyList())
+
     /** Опис зовнішності застарів (чи його немає) — пора оновити з фото. */
     @Synchronized
     fun appearanceStale(name: String, now: Long): Boolean = people[name]?.let { now - it.appearanceAt > APPEARANCE_MS } ?: true
@@ -186,6 +222,7 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         p.appearance?.let { parts += "зовнішність: $it" }
         p.birthday?.let { parts += "день народження ${PersonalFacts.spoken(it)}" + if (birthdayToday(name, now)) " (сьогодні!)" else "" }
         parts += p.facts.takeLast(8)
+        if (p.liked.isNotEmpty()) parts += "цікавиться: " + p.liked.takeLast(6).joinToString(", ")
         habit(p)?.let { parts += it }
         // Одяг моделі не передаємо: інакше вона говорить про нього щоразу (лишається в describe і вітанні).
         absence(p, now)?.let { parts += it }
@@ -354,12 +391,18 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
                     appearance = o.optString("appearance").ifBlank { null },
                     appearanceAt = o.optLong("appearanceAt"),
                     birthday = o.optString("birthday").ifBlank { null },
+                    liked = strings(o.optJSONArray("liked")),
+                    disliked = strings(o.optJSONArray("disliked")),
+                    toldFacts = strings(o.optJSONArray("toldFacts")),
+                    lastFactAt = o.optLong("lastFactAt"),
                 )
             }
         } catch (e: Exception) {
             people.clear()
         }
     }
+
+    private fun strings(a: JSONArray?): MutableList<String> = MutableList(a?.length() ?: 0) { a!!.getString(it) }
 
     private fun save() {
         val s = store ?: return
@@ -388,6 +431,10 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
                     .put("appearance", p.appearance.orEmpty())
                     .put("appearanceAt", p.appearanceAt)
                     .put("birthday", p.birthday.orEmpty())
+                    .put("liked", JSONArray(p.liked))
+                    .put("disliked", JSONArray(p.disliked))
+                    .put("toldFacts", JSONArray(p.toldFacts))
+                    .put("lastFactAt", p.lastFactAt)
             )
         }
         s.saveProfiles(changed)
@@ -401,6 +448,10 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         const val RETURN_MS = 2 * 60_000L
         const val DAY_MS = 24 * 3600_000L
         const val MAX_FACTS = 30
+        /** Цікавий факт — не частіше (щоб не набридати). */
+        const val FACT_GAP_MS = 3 * 3600_000L
+        const val MAX_TOLD = 30
+        const val MAX_TOPICS = 15
         const val MAX_FACT = 140
         const val MAX_EYE_SAMPLES = 200
         /**

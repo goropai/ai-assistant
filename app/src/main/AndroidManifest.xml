@@ -17,6 +17,10 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <!-- Вібрація: нагадування в тиші, "де ти?", дотик, уроки (кожну можна вимкнути) -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Режим сторожа: тривога SMS і дзвінком на номер, вказаний у налаштуваннях (лише за PIN) -->
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
     <!-- Самооновлення: потрібен на Android 8+, на 7.1 діє глобальне "Невідомі джерела" -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Книги вголос: шукаємо файли по всьому сховищу (Android 11+ — "доступ до всіх файлів") -->

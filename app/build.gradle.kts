@@ -83,6 +83,8 @@ android {
     packaging {
         // Стиснені .so в APK — менше трафіку при самооновленні (на 7.1 вони однаково розпаковуються).
         jniLibs.useLegacyPackaging = true
+        // Бібліотеки пошти мають однакові файли ліцензій.
+        resources.excludes += setOf("META-INF/NOTICE.md", "META-INF/LICENSE.md")
     }
 
     androidResources {
@@ -115,6 +117,8 @@ dependencies {
     implementation("androidx.camera:camera-core:$camerax")
     implementation("androidx.camera:camera-camera2:$camerax")
     implementation("androidx.camera:camera-lifecycle:$camerax")
+    // Режим сторожа: 10 с відео зі звуком при тривозі.
+    implementation("androidx.camera:camera-video:$camerax")
 
     // Локальне розпізнавання присутності (EfficientDet-Lite0 у assets).
     // Лише Interpreter: нативна бібліотека Task Library не завантажується на Android 7.1.
@@ -131,6 +135,9 @@ dependencies {
     implementation("cz.adaptech.tesseract4android:tesseract4android:4.9.0")
     // Переклад англійська/російська ↔ українська офлайн (моделі ~30 МБ завантажуються за потреби).
     implementation("com.google.mlkit:translate:17.0.3")
+    // Режим сторожа: лист із фото, відео й звуком через SMTP (пошта людини, пароль застосунку).
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
 
     testImplementation("junit:junit:4.13.2")
     // Справжній org.json для JVM-тестів (в android.jar лише заглушки).

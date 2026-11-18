@@ -195,6 +195,10 @@ class ClaudeClient(
         turn.parts.filterIsInstance<Part.Text>().forEach {
             content.put(JSONObject().put("type", "text").put("text", it.text))
         }
+        // Звуку Claude не приймає — чесна примітка замість нього.
+        if (turn.parts.any { it is Part.Audio }) {
+            content.put(JSONObject().put("type", "text").put("text", "[звук записано, але ця модель не чує аудіо — скажи про це]"))
+        }
         return JSONObject()
             .put("role", if (turn.role == Role.USER) "user" else "assistant")
             .put("content", content)

@@ -78,6 +78,8 @@ class VoiceListener(
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, language)
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, language)
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+        // Проміжний текст: коротке "три" Google інколи відкидає як "нічого не розпізнано", хоча вже чув.
+        putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         if (preferOffline) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
     }
@@ -386,8 +388,12 @@ class VoiceListener(
 
     private fun key(stream: Int) = "volume_$stream"
 
+    /** Останній проміжний текст поточної спроби (на випадок "нічого не розпізнано"). */
+    @Volatile private var lastPartial: String? = null
+
     private val listener = object : RecognitionListener {
         override fun onResults(results: Bundle?) {
+            lastPartial = null
             offlineFailures = 0
             val phrases = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
             // Упевненість розпізнавача в першому варіанті — "вухо" для оцінки вимови.
@@ -402,6 +408,19 @@ class VoiceListener(
         }
 
         override fun onError(error: Int) {
+            // "Нічого не розпізнано", але проміжний текст був (коротке слово) — це і є фраза.
+            val partial = lastPartial
+            lastPartial = null
+            if (partial != null && (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                Log.d(TAG, "heard (проміжне, помилка $error): ${shown(listOf(partial))}")
+                lastConfidence = null
+                resetAudio()
+                sessionUntil = SystemClock.uptimeMillis() + SESSION_MS
+                onPhrase(listOf(partial))
+                scheduleRestart(150)
+                return
+            }
+            if (error != SpeechRecognizer.ERROR_NO_MATCH && error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) Log.d(TAG, "розпізнавач: помилка $error")
             resetAudio() // звук невдалої спроби не має приклеїтись до наступної фрази
             if (preferOffline) {
                 offlineFailures = if (error == SpeechRecognizer.ERROR_CLIENT) offlineFailures + 1 else 0
@@ -431,7 +450,7 @@ class VoiceListener(
             sessionUntil = SystemClock.uptimeMillis() + SESSION_MS
         }
 
-        override fun onReadyForSpeech(params: Bundle?) {}
+        override fun onReadyForSpeech(params: Bundle?) { lastPartial = null }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {
             val b = buffer ?: return
@@ -440,7 +459,10 @@ class VoiceListener(
             addAudio(ShortArray(b.size / 2) { ((b[it * 2].toInt() and 0xff) or (b[it * 2 + 1].toInt() shl 8)).toShort() })
         }
         override fun onEndOfSpeech() {}
-        override fun onPartialResults(partialResults: Bundle?) {}
+        override fun onPartialResults(partialResults: Bundle?) {
+            partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                ?.takeIf { it.isNotBlank() }?.let { lastPartial = it.trim() }
+        }
         override fun onEvent(eventType: Int, params: Bundle?) {}
     }
 

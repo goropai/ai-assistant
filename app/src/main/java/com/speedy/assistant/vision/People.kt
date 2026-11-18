@@ -15,6 +15,10 @@ class People(
     @Synchronized
     fun update(now: Long, faces: List<FaceObservation>): List<PresenceEvent> = tracker.update(now, faces)
 
+    /** Чиє це обличчя (без стеження й подій — для режиму сторожа); null — незнайоме. */
+    @Synchronized
+    fun whoIs(embedding: FloatArray): String? = book.match(embedding)?.first
+
     /**
      * Хто говорить зі Спіді: найближче (найбільше) обличчя. Знайоме — ім'я; незнайоме або давно
      * не видно — null (тоді Спіді не приписує розмову знайомому, що стоїть позаду).

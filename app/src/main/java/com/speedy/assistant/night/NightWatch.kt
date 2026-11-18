@@ -39,6 +39,12 @@ class Yamnet(context: Context) : Closeable {
         return scores[SNORING] to top
     }
 
+    /** Оцінки всіх 521 класу (копія — буфер моделі перезапишеться). */
+    fun scores(window: FloatArray): FloatArray {
+        interpreter.run(window, output)
+        return output[0].copyOf()
+    }
+
     override fun close() = interpreter.close()
 
     companion object {

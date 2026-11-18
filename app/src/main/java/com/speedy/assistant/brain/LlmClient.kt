@@ -7,6 +7,8 @@ enum class Role { USER, ASSISTANT }
 sealed interface Part {
     data class Text(val text: String) : Part
     class Image(val jpeg: ByteArray) : Part
+    /** Звук навколо (WAV) — чує лише Gemini; Claude отримує замість нього примітку. */
+    class Audio(val wav: ByteArray) : Part
 }
 
 data class Turn(val role: Role, val parts: List<Part>)
