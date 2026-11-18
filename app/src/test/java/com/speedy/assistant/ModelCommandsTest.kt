@@ -1,6 +1,9 @@
 package com.speedy.assistant
 
 import com.speedy.assistant.books.BookCommands
+import com.speedy.assistant.guard.GuardCommands
+import com.speedy.assistant.news.News
+import com.speedy.assistant.school.SchoolCommands
 import com.speedy.assistant.media.MediaCommands
 import com.speedy.assistant.night.NightCommands
 import com.speedy.assistant.phone.EventParser
@@ -17,6 +20,7 @@ import org.junit.Test
 class ModelCommandsTest {
     private val allowedLocal = setOf(
         LocalCommand.ENGLISH_LESSON, LocalCommand.ENGLISH_PROGRESS, LocalCommand.REMIND, LocalCommand.LIST_REMINDERS,
+        LocalCommand.CANCEL_REMINDERS, LocalCommand.FIND_PHONE,
         LocalCommand.TIME, LocalCommand.WEATHER, LocalCommand.WHERE, LocalCommand.BATTERY,
     )
 
@@ -24,6 +28,9 @@ class ModelCommandsTest {
         LocalCommands.match(command)?.let { return it in allowedLocal }
         if (EventParser.parse(command, System.currentTimeMillis()) != null) return true
         if (NightCommands.parse(command) != null) return true
+        if (GuardCommands.parse(command) == true) return true // лише ввімкнути
+        if (SchoolCommands.parse(command) != null) return true
+        if (News.isRequest(command)) return true
         if (TranslateCommands.parse(command) != null) return true
         if (MediaCommands.parse(command) != null) return true
         if (BookCommands.parse(command) != null) return true
@@ -49,13 +56,17 @@ class ModelCommandsTest {
             "переклади на англійську я люблю каву", "переклади на російську добрий день",
             "яка погода", "яка погода завтра", "яка погода у Львові", "де ми", "скільки в тебе заряду",
             "послухай уночі чи я хроплю", "чи я хропів", "увімкни запис хропіння",
+            "знайди на ютубі мультики про котів",
+            "урок математики", "урок логіки", "урок про навколишній світ", "математика англійською",
+            "урок української мови", "урок історії", "урок математики для Ліни",
+            "огляд новин", "скасуй нагадування", "яке повітря", "де ти", "вартуй",
         ).forEach { assertTrue("модель скаже «$it», а Спіді не зрозуміє", understood(it)) }
     }
 
     @Test
     fun forbiddenStayForbidden() {
         // Налаштування, PIN, знайомства, оновлення — моделі ні.
-        listOf("зміни пін-код", "мене звати Тарас", "забудь мене", "оновись", "це дитина").forEach {
+        listOf("зміни пін-код", "мене звати Тарас", "забудь мене", "оновись", "це дитина", "досить вартувати").forEach {
             assertTrue("«$it» не має виконуватися від моделі", !understood(it))
         }
     }

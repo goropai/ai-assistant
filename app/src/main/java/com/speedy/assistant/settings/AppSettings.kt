@@ -95,6 +95,16 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("appearance", true)
         set(value) = prefs.edit().putBoolean("appearance", value).apply()
 
+    /** Вага кожного виду уроку в пропозиціях ("english:5,math:4,…", див. LessonKind). */
+    var lessonWeights: String?
+        get() = prefs.getString("lesson_weights", null)
+        set(value) = prefs.edit().putString("lesson_weights", value).apply()
+
+    /** Пропонувати знайомій дитині уроки (англійська, математика, природа…). */
+    var lessonOffers: Boolean
+        get() = prefs.getBoolean("lesson_offers", true)
+        set(value) = prefs.edit().putBoolean("lesson_offers", value).apply()
+
     /** Час від часу цікаві факти під інтереси знайомих. */
     var factsEnabled: Boolean
         get() = prefs.getBoolean("facts", true)

@@ -90,6 +90,14 @@ class ConfiguredLlm(
                 Log.w(TAG, "ключ ${key.label}: квоту вичерпано — ${if (key != fresh.last()) "перемикаюсь" else "інших ключів немає"}")
                 exhaustedUntil[key.free] = now + RECHECK_MS
                 last = e
+            } catch (e: MissingKeyException) {
+                throw e
+            } catch (e: LlmException) {
+                // Жодна модель цього ключа не відповіла (таймаути, перевантаження) — пробуємо інший ключ,
+                // але вичерпаним цей не вважаємо.
+                if (key == fresh.last()) throw e
+                Log.w(TAG, "ключ ${key.label}: не відповів — пробую інший")
+                last = e
             }
         }
         throw last ?: LlmException("Ключ з оплатою вичерпано, а фото й звук безкоштовним ключем не надсилаю")
@@ -107,7 +115,7 @@ class ConfiguredLlm(
 
     private companion object {
         const val TAG = "ConfiguredLlm"
-        /** Вичерпаний ключ пробуємо знову не раніше (денний ліміт оновлюється раз на добу). */
-        const val RECHECK_MS = 60 * 60_000L
+        /** Вичерпаний ключ пробуємо знову не раніше (хвилинні ліміти минають швидко, денні — ні). */
+        const val RECHECK_MS = 15 * 60_000L
     }
 }

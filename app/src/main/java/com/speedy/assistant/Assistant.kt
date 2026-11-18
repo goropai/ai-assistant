@@ -8,6 +8,7 @@ import com.speedy.assistant.brain.LlmException
 import com.speedy.assistant.brain.MissingKeyException
 import com.speedy.assistant.face.FaceView
 import com.speedy.assistant.face.Mood
+import com.speedy.assistant.initiative.PauseCheck
 import com.speedy.assistant.robot.Direction
 import com.speedy.assistant.robot.MoveResult
 import com.speedy.assistant.robot.RobotPlatform
@@ -113,6 +114,14 @@ class Assistant(
     private val onLesson: (Boolean) -> Unit = {},
     /** Записати кілька секунд звуку навколо ("що це за пісня?"); null — мікрофон зайнятий. */
     private val recordSound: suspend (seconds: Int) -> com.speedy.assistant.voice.SoundClip.Clip? = { null },
+    /** Модель приймає звук (Gemini) — у паузі розмови сказане передаємо їй. */
+    private val hearsAudio: () -> Boolean = { false },
+    /** Людину щойно видно передньою камерою (камера присутності). */
+    private val personInFront: () -> Boolean = { false },
+    /** Чи є людина на знімку (задня камера); null — не розібрати. */
+    private val personInPhoto: suspend (ByteArray) -> Boolean? = { null },
+    /** Екран для уроку письма (обвести пальцем обрис); null — немає. */
+    private val tracer: com.speedy.assistant.school.Tracer? = null,
     /** Запит до "мозку" за JSON (уроки, цікаві факти); null — не вдалось. */
     private val generateJson: suspend (system: String, prompt: String) -> String? = { _, _ -> null },
     /** Прогрес уроків математики, логіки тощо. */
@@ -137,6 +146,12 @@ class Assistant(
     private var lastInteraction = SystemClock.uptimeMillis()
     /** Коли людина востаннє щось сказала Спіді (не з моменту запуску, як [lastInteraction]). */
     private var lastTalkAt = Long.MIN_VALUE / 2
+    /** Пауза в розмові: перевірка, чи співрозмовник ще тут (див. PauseCheck). */
+    private var pauseJob: Job? = null
+    /** Остання дія — відповідь моделі в розмові (не команда, урок чи книга). */
+    private var dialogue = false
+    /** У цій паузі Спіді вже заговорила сама — вдруге не заговорює, доки їй не відповідять. */
+    private var pausedOnce = false
 
     fun start() {
         // Поки VLC грає аудіокнигу чи музику, мікрофон не слухає (там теж говорять) — лише дотик.
@@ -209,10 +224,68 @@ class Assistant(
     /** Раз на хвилину: чи не хочеться чогось (на зарядку, уваги). */
     fun checkDesires(hour: Int, someoneNear: Boolean, batteryPercent: Int, charging: Boolean) {
         if (busy || quiet()) return
+        if (maybeOfferLesson(hour)) return
         if (maybeTellFact(hour)) return
         val wish = desires.check(SystemClock.uptimeMillis(), hour, someoneNear, lastInteraction, batteryPercent, charging)
             ?: return
         chirp(wish, if (wish == Chirp.LOW_BATTERY) Mood.SLEEPY else Mood.HAPPY)
+    }
+
+    /** Запропонувала урок: кому, які варіанти, до коли чекаємо відповіді. */
+    private var lessonOffer: Triple<String, List<com.speedy.assistant.school.LessonKind>, Long>? = null
+    private val lastLessonOffer = HashMap<String, Long>()
+
+    /**
+     * Знайома дитина поруч, розмови немає — час від часу (не частіше ніж раз на 2 год) запропонувати урок:
+     * англійська (якщо сьогодні не було) або предмет, яким найдовше не займались.
+     */
+    private fun maybeOfferLesson(hour: Int): Boolean {
+        if (settings?.lessonOffers == false || hour !in 9..19 || !isOnline()) return false
+        val now = SystemClock.uptimeMillis()
+        if (now - lastTalkAt < OFFER_IDLE_MS || Math.random() > OFFER_CHANCE) return false
+        val p = profiles ?: return false
+        val name = people?.presentNames(now)?.firstOrNull { p.age(it) == com.speedy.assistant.people.Profiles.Age.CHILD } ?: return false
+        if (now - (lastLessonOffer[name] ?: Long.MIN_VALUE / 2) < OFFER_GAP_MS) return false
+        if (childLimit?.exhausted(name, childLimitMinutes(), System.currentTimeMillis()) == true) return false
+        lastLessonOffer[name] = now
+        runBusy { offerLesson(name) }
+        return true
+    }
+
+    private suspend fun offerLesson(name: String) {
+        // Письмо — пальцем по екрану: не на колісній платформі (і лише якщо є екран для обведення).
+        val onPlatform = kotlinx.coroutines.withTimeoutOrNull(PLATFORM_CHECK_MS) { robot.status() } != null
+        val exclude = if (onPlatform || tracer == null) setOf(com.speedy.assistant.school.LessonKind.WRITING) else emptySet()
+        val offers = com.speedy.assistant.school.LessonOffers.choose(
+            com.speedy.assistant.school.LessonKind.weights(settings?.lessonWeights), exclude,
+        )
+        if (offers.isEmpty()) return
+        Log.i(TAG, "пропоную урок $name: ${offers.map { it.ua }}${if (onPlatform) " (на платформі — без письма)" else ""}")
+        face.setMood(Mood.HAPPY)
+        say("$name, а давай позаймаємось? Можемо ${offers[0].ua}" + (offers.getOrNull(1)?.let { " — чи, може, ${it.ua}?" } ?: "?"))
+        val until = SystemClock.uptimeMillis() + OFFER_REPLY_MS
+        lessonOffer = Triple(name, offers, until)
+        awaitingCommandUntil = maxOf(awaitingCommandUntil, until)
+        inConversation = true
+    }
+
+    /** Відповідь на пропозицію уроку; true — оброблено. */
+    private fun lessonOfferReaction(candidates: List<String>): Boolean {
+        val (name, offers, until) = lessonOffer ?: return false
+        lessonOffer = null
+        if (SystemClock.uptimeMillis() > until) return false
+        val reply = candidates.firstNotNullOfOrNull { com.speedy.assistant.school.LessonOffers.reply(it, offers) } ?: return false
+        Log.i(TAG, "відповідь на урок ($name): $reply")
+        lastTalkAt = SystemClock.uptimeMillis()
+        when (reply) {
+            com.speedy.assistant.school.LessonOffers.Reply.Decline -> runBusy { face.setMood(Mood.NEUTRAL); say("Добре, іншим разом!") }
+            is com.speedy.assistant.school.LessonOffers.Reply.Take -> {
+                val subject = reply.kind.subject
+                if (subject == null) runBusy { englishLesson("урок англійської для $name") }
+                else runBusy { schoolLesson(subject, "урок для $name") }
+            }
+        }
+        return true
     }
 
     /** Цікавий факт: розказала — чекаємо реакції (ім'я, тема, до коли). */
@@ -280,6 +353,17 @@ class Assistant(
             }
         }
         return true
+    }
+
+    /** Прибрати спогад із пам'яті й профілю того, хто говорить. */
+    private suspend fun forgetThat(what: String) {
+        val words = com.speedy.assistant.brain.Memory.keywords(what)
+        if (words.isEmpty()) return say("Що саме забути?")
+        val n = (memory?.forget(words) ?: 0) + (partner()?.let { profiles?.forgetFacts(it, words) } ?: 0)
+        Log.i(TAG, "забути: $words — прибрано $n")
+        brain.reset() // і з поточної розмови, щоб модель не повторила
+        face.setMood(Mood.NEUTRAL)
+        say(if (n > 0) "Добре, забула." else "Я такого й не пам'ятала.")
     }
 
     /** Тиха перевірка після запуску: говоримо лише тоді, коли знайшлася нова версія. */
@@ -595,6 +679,7 @@ class Assistant(
     }
 
     private fun interrupt() {
+        pauseJob?.cancel()
         commandJob?.cancel()
         voice.stop()
         scope.launch { robot.stop() }
@@ -614,6 +699,7 @@ class Assistant(
             return
         }
         if (factReaction(candidates)) return
+        if (lessonOfferReaction(candidates)) return
         // Дзвонить будильник: під сигнал фраза розпізнається криво — досить уламка ("будник", "стоп").
         if (ears.ringing) candidates.firstNotNullOfOrNull { LocalCommands.whileRinging(it) }?.let { cmd ->
             lastInteraction = SystemClock.uptimeMillis()
@@ -692,6 +778,7 @@ class Assistant(
         lastInteraction = SystemClock.uptimeMillis()
         lastTalkAt = lastInteraction
         inConversation = true
+        pausedOnce = false
         noteClaimedName(candidates)
         noteVoice()
         // Розмова — теж контакт: "привіт" наступного разу — лише через 3 години після неї.
@@ -768,6 +855,8 @@ class Assistant(
             while (busy) delay(100)
             lastInteraction = SystemClock.uptimeMillis()
             noteClaimedName(listOf(text))
+            pausedOnce = false
+            inConversation = true
             runBusy { handle(text) }
         }
     }
@@ -777,6 +866,9 @@ class Assistant(
         onBusyChanged(true)
         ears.stop() // не слухаємо самих себе
         idleJob?.cancel()
+        pauseJob?.cancel()
+        pauseJob = null
+        dialogue = false
         commandJob = scope.launch {
             try {
                 delay(VoiceListener.UNMUTE_DELAY_MS) // поки розпізнавач не замовкне, звук приглушено
@@ -808,6 +900,8 @@ class Assistant(
                 if (playback?.playingAudio == true) mutedForMedia = true
                 else if (micFree()) ears.start(listenNow = SystemClock.uptimeMillis() < awaitingCommandUntil)
                 scheduleIdle()
+                // Відповіла в розмові — якщо далі тиша, перевірити, чи до неї ще говорять.
+                if (dialogue && inConversation) schedulePauseCheck()
             }
         }
     }
@@ -828,6 +922,8 @@ class Assistant(
             null -> {}
         }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { return schoolLesson(it, command) }
+        // "Забудь, що я люблю drum and bass" — модель уміє лише додавати спогади, прибирає людина.
+        FORGET_THAT.find(command.lowercase().trim())?.let { return forgetThat(it.groupValues[1]) }
         val cmd = LocalCommands.match(command)
         when (cmd) {
             LocalCommand.STOP -> {
@@ -1051,7 +1147,13 @@ class Assistant(
     /** Агентний цикл із моделлю: відповісти, подивитись, пошукати, поїхати — поки не досягне мети. */
     private suspend fun askModel(command: String) {
         face.setMood(Mood.THINKING)
-        var reply = ask(command)
+        runAgent(ask(command))
+    }
+
+    /** Агентний цикл від першої відповіді моделі. */
+    private suspend fun runAgent(first: AgentReply) {
+        dialogue = true
+        var reply = first
         var looks = 0
         var steps = 0
         var searches = 0
@@ -1139,6 +1241,7 @@ class Assistant(
                     reply = ask(Brain.navFollowUp(action.direction, ms, outcome, status?.distanceCm, steps), jpeg)
                 }
                 "command" -> {
+                    dialogue = false // команда (урок, книга, відео) — не розмова
                     if (reply.say.isNotBlank()) speak(reply)
                     if (!runModelCommand(action.query)) {
                         Log.w(TAG, "модель: невідома команда \"${action.query}\"")
@@ -1166,6 +1269,7 @@ class Assistant(
         Log.i(TAG, "модель просить: \"$command\"")
         when (LocalCommands.match(command)) {
             LocalCommand.ENGLISH_LESSON, LocalCommand.ENGLISH_PROGRESS, LocalCommand.REMIND, LocalCommand.LIST_REMINDERS,
+            LocalCommand.CANCEL_REMINDERS, LocalCommand.FIND_PHONE,
             LocalCommand.TIME, LocalCommand.WEATHER, LocalCommand.WHERE, LocalCommand.BATTERY -> {
                 handle(command) // кожна з цих гілок завершується сама — до моделі не повертається
                 return true
@@ -1175,6 +1279,8 @@ class Assistant(
         }
         com.speedy.assistant.phone.EventParser.parse(command, System.currentTimeMillis())?.let { addCalendarEvent(it); return true }
         com.speedy.assistant.night.NightCommands.parse(command)?.let { handleNight(it); return true }
+        // Сторож: модель може лише ввімкнути (вимкнути — знайоме обличчя чи PIN, тобто людина).
+        if (com.speedy.assistant.guard.GuardCommands.parse(command) == true) { armGuard(); return true }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { schoolLesson(it, command); return true }
         if (com.speedy.assistant.news.News.isRequest(command)) { newsDigest(); return true }
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return true }
@@ -1319,6 +1425,7 @@ class Assistant(
     /** Урок математики, логіки тощо: модель складає під учня (вік, рівень, минулі помилки). */
     private suspend fun schoolLesson(subject: com.speedy.assistant.school.Subject, command: String = "") {
         val progress = school ?: return say("Я поки не вмію проводити такі уроки.")
+        if (subject == com.speedy.assistant.school.Subject.WRITING) return writingLesson(progress, command)
         if (!isOnline()) return say("Для уроку потрібен інтернет: завдання я складаю разом із моделлю.")
         val name = learnerFor(command)
         greetLearner(name)
@@ -1362,6 +1469,27 @@ class Assistant(
         if (!child) return null
         val speaker = people?.speaker(SystemClock.uptimeMillis(), ANSWER_FACE_MS) ?: return null
         return speaker.takeIf { it != learner && profiles?.age(it) == com.speedy.assistant.people.Profiles.Age.ADULT }
+    }
+
+    /** Урок письма: обвести пальцем обриси на екрані (без моделі й інтернету). */
+    private suspend fun writingLesson(progress: com.speedy.assistant.school.SchoolProgress, command: String) {
+        val t = tracer ?: return say("На цьому екрані я не вмію вчити писати.")
+        val name = learnerFor(command)
+        greetLearner(name)
+        Log.i(TAG, "урок письма: $name, рівень ${progress.level(name, com.speedy.assistant.school.Subject.WRITING)}")
+        inConversation = false
+        val lesson = com.speedy.assistant.school.WritingLesson(lessonIO(), t, progress, name, now = { System.currentTimeMillis() })
+        val start = System.currentTimeMillis()
+        try {
+            lesson.run()
+        } finally {
+            t.hide()
+        }
+        if (profiles?.age(name) == com.speedy.assistant.people.Profiles.Age.CHILD || childSpeaking()) {
+            childLimit?.add(name, System.currentTimeMillis() - start, System.currentTimeMillis())
+        }
+        Log.i(TAG, "урок письма завершено ($name): ${lesson.result}")
+        face.setMood(Mood.HAPPY)
     }
 
     /** Відповідь на уроці: слухаємо одразу (без "Спіді") потрібною мовою, до 9 с. */
@@ -2489,6 +2617,116 @@ class Assistant(
         }
     }
 
+    /**
+     * Розмова з моделлю, а далі тиша (фразу загубив розпізнавач, пропав звук): за [PauseCheck.PAUSE_MS]
+     * перевіряти, чи співрозмовник ще тут — камери й короткі записи звуку, — і продовжити розмову або
+     * тихо її завершити. За паузу — щонайбільше одна репліка Спіді.
+     */
+    private fun schedulePauseCheck() {
+        pauseJob?.cancel()
+        pauseJob = null
+        if (pausedOnce || quiet() || !micFree() || lessonAnswer != null) return
+        val repliedAt = SystemClock.uptimeMillis()
+        pauseJob = scope.launch {
+            delay(PauseCheck.PAUSE_MS)
+            val until = SystemClock.uptimeMillis() + PauseCheck.CHECK_MS
+            // Що за цей час розбере розпізнавач — теж продовження розмови (без "Спіді").
+            awaitingCommandUntil = maxOf(awaitingCommandUntil, until)
+            inConversation = true
+            idleJob?.cancel()
+            Log.i(TAG, "пауза в розмові — перевіряю, чи співрозмовник ще тут")
+            var present = 0
+            var tick = 0
+            while (true) {
+                val started = SystemClock.uptimeMillis()
+                if (busy || quiet() || !micFree()) return@launch
+                val back = tick++ % 2 == 1 // задня камера — через раз (знімок і детектор — не безкоштовні)
+                val (clip, seen) = presenceTick(back)
+                val speech = clip?.speech == true
+                if (speech || seen) present++
+                val timeLeft = SystemClock.uptimeMillis() + PauseCheck.TICK_MS < until
+                val next = PauseCheck.next(speech, hearsAudio(), present, timeLeft)
+                Log.i(TAG, "пауза: ${if (back) "обидві камери" else "передня камера"} — ${if (seen) "є людина" else "нікого"}, " +
+                    "мовлення ${clip?.speechWindows ?: "—"} вікон (класи ${clip?.topClasses ?: "—"}) → $next")
+                when (next) {
+                    PauseCheck.Next.WAIT -> delay((PauseCheck.TICK_MS - (SystemClock.uptimeMillis() - started)).coerceAtLeast(500))
+                    PauseCheck.Next.END -> {
+                        pauseJob = null
+                        Log.i(TAG, "пауза: співрозмовника немає — тихо завершую розмову")
+                        awaitingCommandUntil = 0
+                        inConversation = false
+                        scheduleIdle()
+                        return@launch
+                    }
+                    PauseCheck.Next.ANSWER_SPEECH, PauseCheck.Next.CONTINUE -> {
+                        pauseJob = null
+                        pausedOnce = true
+                        val silent = ((SystemClock.uptimeMillis() - repliedAt) / 1000).toInt()
+                        val wav = clip?.wav?.takeIf { next == PauseCheck.Next.ANSWER_SPEECH }
+                        runBusy { pauseFollowUp(silent, wav) }
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Одна перевірка паузи: кілька секунд звуку (розпізнавач на цей час відпускає мікрофон), передня
+     * камера — з камери присутності, задня ([back]) — знімком одночасно із записом.
+     * @return запис (null — мікрофон зайнятий) і чи видно людину
+     */
+    private suspend fun presenceTick(back: Boolean): Pair<com.speedy.assistant.voice.SoundClip.Clip?, Boolean> {
+        ears.stop()
+        try {
+            val front = personInFront()
+            delay(VoiceListener.UNMUTE_DELAY_MS) // розпізнавач має відпустити мікрофон
+            return coroutineScope {
+                val behind = if (back) async { personBehind() } else null
+                val clip = recordSound(PauseCheck.RECORD_SECONDS)
+                clip to (front || behind?.await() == true)
+            }
+        } finally {
+            // Перервали (заговорили, торкнулись) — слух уже вмикає runBusy.
+            if (!busy && micFree()) ears.start(listenNow = true)
+        }
+    }
+
+    /** Знімок задньою камерою і локальний детектор: чи є там людина (без моделі). */
+    private suspend fun personBehind(): Boolean {
+        onBusyChanged(true) // камера присутності відпускає камеру
+        return try {
+            delay(SETTLE_MS)
+            kotlinx.coroutines.withTimeoutOrNull(PERSON_PHOTO_MS) {
+                personInPhoto(camera.take(front = false, maxSide = 640, quick = true))
+            } == true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "пауза: задня камера не вдалась", e)
+            false
+        } finally {
+            if (!busy) onBusyChanged(false)
+        }
+    }
+
+    /** Співрозмовник тут: відповісти на почуте ([wav] — звук із мовленням) або підхопити розмову. */
+    private suspend fun pauseFollowUp(silentSec: Int, wav: ByteArray?) {
+        Log.i(TAG, if (wav != null) "пауза: чути мовлення — передаю звук моделі" else "пауза: співрозмовник тут — продовжую розмову")
+        face.setMood(Mood.THINKING)
+        lastInteraction = SystemClock.uptimeMillis()
+        val reply = ask(Brain.pauseFollowUp(silentSec, wav != null), audio = wav)
+        if (reply.say.isBlank() && reply.action.type == "none") {
+            Log.i(TAG, "пауза: модель вирішила не втручатися — мовчу")
+            if (reply.remember.isNotBlank()) rememberFact(reply.remember)
+            awaitingCommandUntil = 0
+            inConversation = false
+            face.setMood(Mood.NEUTRAL)
+            return
+        }
+        runAgent(reply)
+    }
+
     /** Після розмови — повернутись до спокою, а згодом "задрімати". */
     private fun scheduleIdle() {
         idleJob?.cancel()
@@ -2514,6 +2752,8 @@ class Assistant(
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 3
         const val SETTLE_MS = 300L
+        /** Знімок задньою камерою для паузи в розмові — не довше (інакше перевірка розтягується). */
+        const val PERSON_PHOTO_MS = 6_000L
         const val LAUNCH_CHECK_DELAY_MS = 5_000L
         /** Просте "продовжуй" — про книгу, якщо читали протягом цього часу. */
         const val BARE_CONTINUE_MS = 30 * 60_000L
@@ -2529,10 +2769,18 @@ class Assistant(
         const val RECENT_KNOWN_MS = 5 * 60_000L
         /** "Привіт" знову — лише якщо не було контакту довше. */
         const val GREET_AGAIN_MS = 3 * 3600_000L
+        private val FORGET_THAT = Regex("^(?:спіді[,\\s]+)?(?:забудь|не\\s+пам'ятай|видали\\s+з\\s+пам'яті)[,\\s]+(?:що|про\\s+те\\s+що|про\\s+те,\\s+що|про)\\s+(.{3,})$")
         /** Розмова була щойно — знайоме обличчя знову в кадрі не вітаємо. */
         const val TALKED_RECENTLY_MS = 5 * 60_000L
         /** Сторож вмикається не одразу — встигнути вийти з кімнати. */
         const val GUARD_DELAY_MS = 30_000L
+        /** Пропозиція уроку: без розмови стільки, ймовірність на хвилину, не частіше ніж, скільки чекати відповіді. */
+        const val OFFER_IDLE_MS = 3 * 60_000L
+        const val OFFER_CHANCE = 0.2
+        const val OFFER_GAP_MS = 2 * 3600_000L
+        const val OFFER_REPLY_MS = 25_000L
+        /** Чи стоїть на колісній платформі — відповідь не довше (немає платформи — мовчить). */
+        const val PLATFORM_CHECK_MS = 2_000L
         /** Місце для новин — не довше (GPS може думати довго; тоді — новини України). */
         const val NEWS_LOCATE_MS = 6_000L
         /** Обличчя біля камери не старше — щоб вирішити, хто відповів на уроці. */

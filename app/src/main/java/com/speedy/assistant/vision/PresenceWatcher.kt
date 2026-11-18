@@ -62,6 +62,32 @@ class PresenceWatcher(
     @Volatile var scene: String = ""
         private set
 
+    /** Коли востаннє бачила людину передньою камерою (uptimeMillis; 0 — не бачила). */
+    @Volatile var personSeenAt: Long = 0
+        private set
+
+    /**
+     * Чи є людина на знімку (задня камера, коли передня спостереження зупинене) — тим самим детектором.
+     * null — детектора немає чи знімок не розібрати.
+     */
+    suspend fun personIn(jpeg: ByteArray): Boolean? = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+        try {
+            executor.execute {
+                val found = try {
+                    val bitmap = android.graphics.BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                    val model = if (bitmap == null) null else detector()
+                    model?.detect(bitmap, SCORE_THRESHOLD)?.any { d -> Kind.fromCoco(d.cocoClass) == Kind.PERSON }
+                } catch (e: Exception) {
+                    Log.w(TAG, "person check failed", e)
+                    null
+                }
+                cont.resume(found) {}
+            }
+        } catch (e: java.util.concurrent.RejectedExecutionException) {
+            cont.resume(null) {}
+        }
+    }
+
     /** Викликати з головного потоку. */
     fun start() {
         wanted = true
@@ -134,6 +160,7 @@ class PresenceWatcher(
             scene = detections.filter { d -> d.score >= SCORE_THRESHOLD && Kind.fromCoco(d.cocoClass) == null }
                 .mapNotNull { d -> CocoNames.ua(d.cocoClass) }.distinct().take(6).joinToString(", ")
             val kinds = sightings.map { s -> s.kind }.toSet()
+            if (Kind.PERSON in kinds) personSeenAt = now
             if (kinds != lastKinds) {
                 Log.i(TAG, "бачу: ${kinds.joinToString { k -> k.ua }.ifEmpty { "нікого" }} " +
                     sightings.joinToString(prefix = "(", postfix = ")") { s -> "%s %.2f".format(s.kind.ua, s.score) })

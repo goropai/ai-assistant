@@ -110,6 +110,28 @@ object SettingsDialog {
             isChecked = settings.factsEnabled
         }
         form.addView(facts)
+        val offers = CheckBox(context).apply {
+            text = "Пропонувати дітям уроки (не частіше ніж раз на 2 год)"
+            isChecked = settings.lessonOffers
+        }
+        form.addView(offers)
+        label("Які уроки пропонувати частіше (0 — ніколи, 5 — найчастіше)")
+        val weights = com.speedy.assistant.school.LessonKind.weights(settings.lessonWeights).toMutableMap()
+        weights.keys.toList().forEach { kind ->
+            val title = TextView(context).apply { setPadding(0, pad / 3, 0, 0) }
+            fun caption() { title.text = "${kind.ua.replaceFirstChar { it.uppercase() }}: ${weights[kind]}" }
+            caption()
+            form.addView(title)
+            form.addView(android.widget.SeekBar(context).apply {
+                max = 5
+                progress = weights[kind] ?: kind.defaultWeight
+                setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: android.widget.SeekBar?, value: Int, fromUser: Boolean) { weights[kind] = value; caption() }
+                    override fun onStartTrackingTouch(bar: android.widget.SeekBar?) {}
+                    override fun onStopTrackingTouch(bar: android.widget.SeekBar?) {}
+                })
+            })
+        }
 
         label("Вібрація")
         fun vibe(text: String, on: Boolean) = CheckBox(context).apply { this.text = text; isChecked = on; form.addView(this) }
@@ -253,6 +275,8 @@ object SettingsDialog {
                 family?.let { f -> genders.forEach { (name, g) -> if (g != com.speedy.assistant.people.Gender.UNKNOWN && g != f.gender(name)) f.setGender(name, g) } }
                 settings.appearanceEnabled = appearance.isChecked
                 settings.factsEnabled = facts.isChecked
+                settings.lessonOffers = offers.isChecked
+                settings.lessonWeights = com.speedy.assistant.school.LessonKind.save(weights)
                 saveGuard()
                 onSaved()
             }

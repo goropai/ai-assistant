@@ -2,6 +2,7 @@ package com.speedy.assistant
 
 import com.speedy.assistant.initiative.Facts
 import com.speedy.assistant.people.Profiles
+import com.speedy.assistant.school.LessonKind
 import com.speedy.assistant.school.Numbers
 import com.speedy.assistant.school.SchoolCommands
 import com.speedy.assistant.school.SchoolGenerator
@@ -106,5 +107,34 @@ class SchoolTest {
         assertEquals(listOf("футбол"), disliked)
         assertEquals(1, told.size)
         assertTrue(p.summary("Ліна", 2000).contains("цікавиться: космос"))
+    }
+
+    @Test
+    fun lessonOffersByWeight() {
+        val w = LessonKind.weights("english:5,math:0,writing:3")
+        assertEquals(5, w[LessonKind.ENGLISH]); assertEquals(0, w[LessonKind.MATH]); assertEquals(LessonKind.LOGIC.defaultWeight, w[LessonKind.LOGIC])
+        assertEquals(w, LessonKind.weights(LessonKind.save(w)))
+        // Вага 0 і виключені (письмо на платформі) — ніколи; два варіанти різні.
+        repeat(200) { seed ->
+            val two = com.speedy.assistant.school.LessonOffers.choose(w, setOf(LessonKind.WRITING), kotlin.random.Random(seed))
+            assertEquals(2, two.size)
+            assertTrue(two[0] != two[1])
+            assertTrue(two.none { it == LessonKind.MATH || it == LessonKind.WRITING })
+        }
+        // Важчий вибирається частіше.
+        val only = mapOf(LessonKind.ENGLISH to 5, LessonKind.HISTORY to 1)
+        val englishFirst = (0 until 600).count { com.speedy.assistant.school.LessonOffers.choose(only, random = kotlin.random.Random(it)).first() == LessonKind.ENGLISH }
+        assertTrue("$englishFirst", englishFirst in 420..580)
+
+        val offers = listOf(LessonKind.ENGLISH, LessonKind.WORLD)
+        fun r(t: String) = com.speedy.assistant.school.LessonOffers.reply(t, offers)
+        assertEquals(com.speedy.assistant.school.LessonOffers.Reply.Take(LessonKind.ENGLISH), r("так"))
+        assertEquals(com.speedy.assistant.school.LessonOffers.Reply.Take(LessonKind.WORLD), r("давай про природу"))
+        assertEquals(com.speedy.assistant.school.LessonOffers.Reply.Take(LessonKind.HISTORY), r("краще історію"))
+        assertEquals(com.speedy.assistant.school.LessonOffers.Reply.Take(LessonKind.WRITING), r("хочу писати"))
+        assertEquals(com.speedy.assistant.school.LessonOffers.Reply.Decline, r("не хочу"))
+        assertEquals(null, r("а котра година"))
+        assertEquals(Subject.WRITING, SchoolCommands.parse("давай урок письма"))
+        assertEquals(Subject.WRITING, SchoolCommands.parse("хочу обводити літери"))
     }
 }

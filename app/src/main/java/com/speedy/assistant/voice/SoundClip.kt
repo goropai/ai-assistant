@@ -20,8 +20,10 @@ object SoundClip {
      * (тишу, шум кімнати, гул мережі), а музику, голос, спів чи виразний звук. Гучність сама не
      * годиться: тиша кімнати на J5 така ж гучна, як тиха музика.
      */
-    class Clip(val wav: ByteArray, val rms: Double, val soundWindows: Int, val topClasses: List<Int>) {
+    class Clip(val wav: ByteArray, val rms: Double, val soundWindows: Int, val topClasses: List<Int>, val speechWindows: Int = 0) {
         val audible: Boolean get() = soundWindows >= MIN_WINDOWS
+        /** Чути мовлення (хтось говорить), а не лише музику чи шум. */
+        val speech: Boolean get() = speechWindows >= MIN_WINDOWS
     }
 
     private const val MIN_WINDOWS = 2
@@ -29,6 +31,8 @@ object SoundClip {
     /** Нижче — справжня тиша, модель не запускаємо. */
     private const val SILENCE_RMS = 40.0
     /** Тло: тиша, приміщення, шуми, гул мережі, луна, "польовий запис". */
+    /** Мовлення: мова, дитяча мова, розмова, оповідь, белькіт, крик (синтезатор — ні: це сама Спіді чи телевізор). */
+    private val SPEECH = setOf(0, 1, 2, 3, 4, 6)
     private val BACKGROUND = setOf(494, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510, 511, 512, 513, 514, 515, 520)
 
     /** null — мікрофон зайнятий. Мікрофон має бути вільний (слух Спіді зупинено). */
@@ -48,8 +52,8 @@ object SoundClip {
             }
             if (read == 0) return@withContext null
             val rms = rms(pcm, read)
-            val (windows, tops) = if (rms < SILENCE_RMS) 0 to emptyList() else classify(context, pcm, read)
-            Clip(wav(pcm, read), rms, windows, tops)
+            val c = if (rms < SILENCE_RMS) Classes(0, emptyList(), 0) else classify(context, pcm, read)
+            Clip(wav(pcm, read), rms, c.windows, c.tops, c.speech)
         } catch (e: Exception) {
             Log.w("SoundClip", "запис не вдався", e)
             null
@@ -58,13 +62,16 @@ object SoundClip {
         }
     }
 
-    /** Скільки вікон (крок 0.5 с) не тло, і найчастіші класи — для журналу. */
-    private fun classify(context: android.content.Context, pcm: ByteArray, size: Int): Pair<Int, List<Int>> {
-        val yamnet = try { com.speedy.assistant.night.Yamnet(context) } catch (e: Exception) { return Int.MAX_VALUE to emptyList() }
+    private class Classes(val windows: Int, val tops: List<Int>, val speech: Int)
+
+    /** Скільки вікон (крок 0.5 с) не тло, скільки з мовленням, і найчастіші класи — для журналу. */
+    private fun classify(context: android.content.Context, pcm: ByteArray, size: Int): Classes {
+        val yamnet = try { com.speedy.assistant.night.Yamnet(context) } catch (e: Exception) { return Classes(Int.MAX_VALUE, emptyList(), 0) }
         try {
             val samples = size / 2
             val window = FloatArray(com.speedy.assistant.night.Yamnet.WINDOW)
             var count = 0
+            var speech = 0
             val tops = mutableListOf<Int>()
             var start = 0
             while (start + window.size <= samples) {
@@ -77,9 +84,10 @@ object SoundClip {
                 for (i in scores.indices) if (scores[i] > scores[top]) top = i
                 tops += top
                 if (top !in BACKGROUND && scores[top] >= SCORE) count++
+                if (SPEECH.any { scores[it] >= SCORE }) speech++
                 start += RATE / 2
             }
-            return count to tops.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(3).map { it.key }
+            return Classes(count, tops.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(3).map { it.key }, speech)
         } finally {
             yamnet.close()
         }

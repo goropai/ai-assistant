@@ -137,6 +137,16 @@ class Profiles(private val store: ProfileStore?, private val zone: TimeZone = Ti
         return true
     }
 
+    /** Прибрати факти про людину, у яких є всі [words] ("забудь, що я люблю …"); скільки прибрано. */
+    @Synchronized
+    fun forgetFacts(name: String, words: Set<String>): Int {
+        val p = people[name] ?: return 0
+        val before = p.facts.size
+        p.facts.removeAll { com.speedy.assistant.brain.Memory.forgettable(it, words) }
+        if (p.facts.size != before) save()
+        return before - p.facts.size
+    }
+
     /** Стать: сказана прямо, інакше — з імені. */
     @Synchronized
     fun gender(name: String): Gender = people[name]?.gender?.let { runCatching { Gender.valueOf(it) }.getOrNull() } ?: Gender.guess(name)

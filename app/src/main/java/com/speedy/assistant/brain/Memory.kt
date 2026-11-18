@@ -39,6 +39,15 @@ class Memory(private val file: File?) {
         return true
     }
 
+    /** Прибрати факти, у яких є всі [words] (людина сказала "забудь, що …"); скільки прибрано. */
+    @Synchronized
+    fun forget(words: Set<String>): Int {
+        val before = facts.size
+        facts.removeAll { f -> forgettable(f, words) }
+        if (facts.size != before) file?.writeTextAtomic(JSONArray(facts).toString())
+        return before - facts.size
+    }
+
     @Synchronized
     fun clear() {
         facts.clear()
@@ -46,6 +55,23 @@ class Memory(private val file: File?) {
     }
 
     companion object {
+        /**
+         * Слова, що визначають, про що спогад ("drum and bass" → drum, bass): без коротких службових і без
+         * дієслів ставлення ("люблю", "любить" — у факті інша форма).
+         */
+        fun keywords(text: String): Set<String> =
+            text.lowercase().split(Regex("[^\\p{L}\\p{N}'’-]+"))
+                .filter { it.length >= 3 && it !in STOP }
+                .map { it.take(5) } // основа: "барабани" ~ "барабанів"
+                .toSet()
+
+        /** Факт про те саме: містить усі ключові слова (за основою). */
+        fun forgettable(fact: String, words: Set<String>): Boolean = words.isNotEmpty() && keywords(fact).containsAll(words)
+
+        private val STOP = setOf("що", "про", "мене", "мені", "мій", "моя", "моє", "мої", "мого", "люблю", "любить",
+            "любиш", "любив", "любила", "подобається", "подобаються", "мого", "його", "її", "and", "the", "тобі", "тебе",
+            "дуже", "також", "теж", "улюблений", "улюблена", "улюблене", "улюблені", "слухаю", "слухає", "слухати", "той", "те", "це")
+
         const val MAX_FACTS = 40
         const val MAX_LENGTH = 160
     }

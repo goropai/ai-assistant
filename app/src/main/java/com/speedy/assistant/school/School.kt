@@ -13,9 +13,13 @@ enum class Subject(val code: String, val ua: String, val about: String) {
     MATH("math", "математика", "лічба, додавання й віднімання, порівняння, задачі на кмітливість з числами"),
     LOGIC("logic", "логіка", "закономірності, зайве в ряду, що спільного, прості логічні задачі й загадки"),
     WORLD("world", "навколишній світ", "тварини, рослини, пори року, тіло людини, безпека, як влаштовані речі"),
-    UKRAINIAN("ukrainian", "українська мова", "букви й звуки, склади, рими, перший звук слова, протилежні слова, наголос; для старших — частини мови, правопис"),
+    UKRAINIAN("ukrainian", "українська мова", "букви й звуки, склади, рими, перший звук слова, протилежні слова; правопис (як пишеться слово — " +
+        "назвати букву чи вибрати з двох варіантів), значення слів і як їх уживати в реченні, вимова й наголос (де наголос у слові); " +
+        "для старших — частини мови"),
     HISTORY("history", "історія", "історія України і світу простими словами: як жили люди раніше, видатні люди, події, винаходи, символи"),
-    MATH_EN("math_en", "математика англійською", "лічба й прості приклади англійською: питання англійською, відповідь числом англійською");
+    MATH_EN("math_en", "математика англійською", "лічба й прості приклади англійською: питання англійською, відповідь числом англійською"),
+    /** Письмо — без моделі: обвести пальцем обрис фігури, цифри чи літери (див. WritingLesson). */
+    WRITING("writing", "письмо", "обвести пальцем фігури, цифри й літери");
 
     companion object {
         fun of(code: String) = entries.firstOrNull { it.code == code }
@@ -28,6 +32,7 @@ object SchoolCommands {
     private val mathEn = Regex("(?:математик\\p{L}*|рахувати|порахуємо|рахуємо|лічб\\p{L}*)\\s+(?:\\p{L}+\\s+)?(?:англійськ|по-англійськ)|англійськ\\p{L}*\\s+(?:математик|рахун|лічб)|math")
     private val math = Regex("(?:^|\\s)(?:урок\\p{L}*\\s+)?(?:математик\\p{L}*|арифметик\\p{L}*)|$VERB\\s+(?:\\p{L}+\\s+)?(?:порахуємо|рахувати|лічбу)|^порахуємо$|^давай\\s+порахуємо")
     private val logic = Regex("логік\\p{L}*|логічн\\p{L}*\\s+(?:задач|загад|ігр)|задачк\\p{L}*\\s+на\\s+кмітлив|на\\s+кмітливість")
+    private val writing = Regex("(?:урок\\p{L}*|заняття)\\s+письм|обвод\\p{L}*\\s+(?:літер|букв|цифр|фігур)|(?:давай|хочу|будемо)\\s+(?:писати|пописати|обводити)|^писати\\s+літери")
     private val world = Regex("навколишн\\p{L}*\\s+світ|(?:урок|заняття)\\s+про\\s+(?:природу|світ|тварин)")
     /** Лише як урок: "розмовляй українською" чи "розкажи історію" (казку) — не уроки. */
     private const val LESSON = "(?:урок\\p{L}*|заняття|вчимо|вчити|повчимо|повчи|навчи|позаймаємось|позаймаємося|займемося)"
@@ -40,6 +45,7 @@ object SchoolCommands {
         val t = phrase.lowercase().replace(Regex("[,.!?]"), " ").replace(Regex("\\s+"), " ").trim()
         if (question.containsMatchIn(t)) return null
         return when {
+            writing.containsMatchIn(t) -> Subject.WRITING
             mathEn.containsMatchIn(t) -> Subject.MATH_EN
             logic.containsMatchIn(t) -> Subject.LOGIC
             world.containsMatchIn(t) -> Subject.WORLD
@@ -134,6 +140,11 @@ class SchoolProgress(private val file: File?) {
 
     @Synchronized
     fun level(name: String, s: Subject): Int = subject(name, s).optInt("level", 1)
+
+    /** Коли востаннє був урок цього предмета (null — ще не було). */
+    @Synchronized
+    fun lastAt(name: String, s: Subject): Long? =
+        subject(name, s).optJSONArray("lessons")?.takeIf { it.length() > 0 }?.let { it.getJSONObject(it.length() - 1).optLong("at") }
 
     /** Останні уроки: "тема — 4 з 5, помилки: …" (для моделі). */
     @Synchronized
@@ -292,5 +303,73 @@ class SchoolLesson(
 
     private companion object {
         val STOP_WORDS = listOf("досить", "стоп", "закінч", "вистачить", "хватит", "stop")
+    }
+}
+
+/** Урок, який Спіді пропонує сама: англійська (свій курс) чи предмет "школи"; вага — з налаштувань. */
+enum class LessonKind(val code: String, val ua: String, val defaultWeight: Int, val subject: Subject?) {
+    ENGLISH("english", "урок англійської", 5, null),
+    MATH("math", "урок математики", 4, Subject.MATH),
+    UKRAINIAN("ukrainian", "урок української", 3, Subject.UKRAINIAN),
+    WRITING("writing", "урок письма — обводити літери пальчиком", 3, Subject.WRITING),
+    LOGIC("logic", "логічні задачки", 3, Subject.LOGIC),
+    WORLD("world", "урок про природу й навколишній світ", 2, Subject.WORLD),
+    HISTORY("history", "урок історії", 2, Subject.HISTORY),
+    MATH_EN("math_en", "математику англійською", 2, Subject.MATH_EN);
+
+    companion object {
+        fun of(subject: Subject) = entries.first { it.subject == subject }
+
+        /** Ваги з налаштувань ("english:5,math:4,…"); чого немає — типова. */
+        fun weights(saved: String?): Map<LessonKind, Int> {
+            val map = saved.orEmpty().split(',').mapNotNull { part ->
+                val (k, v) = part.split(':').takeIf { it.size == 2 } ?: return@mapNotNull null
+                entries.firstOrNull { it.code == k.trim() }?.let { it to (v.trim().toIntOrNull() ?: it.defaultWeight).coerceIn(0, 5) }
+            }.toMap()
+            return entries.associateWith { map[it] ?: it.defaultWeight }
+        }
+
+        fun save(weights: Map<LessonKind, Int>): String = weights.entries.joinToString(",") { "${it.key.code}:${it.value}" }
+    }
+}
+
+/** Пропозиція уроку дитині: два різні види, випадково з урахуванням ваг (0 — не пропонувати). */
+object LessonOffers {
+    private val yes = Regex("^(?:так|ага|давай|давайте|хочу|можна|звісно|звичайно|окей|ок|добре|залюбки|yes)(?:\\s|$)")
+    private val no = Regex("^(?:ні|не\\s+хочу|не\\s+треба|потім|не\\s+зараз|пізніше|не\\s+буду|досить|no)(?:\\s|$)|не\\s+хочу")
+    private val englishWord = Regex("англійськ|english")
+
+    /** Два різні види; [exclude] — недоступні зараз (письмо на колісній платформі). Менше двох — що є. */
+    fun choose(weights: Map<LessonKind, Int>, exclude: Set<LessonKind> = emptySet(), random: kotlin.random.Random = kotlin.random.Random): List<LessonKind> {
+        val pool = weights.filter { it.value > 0 && it.key !in exclude }.toMutableMap()
+        val picked = mutableListOf<LessonKind>()
+        repeat(2) {
+            val total = pool.values.sum()
+            if (total <= 0) return picked
+            var r = random.nextInt(total)
+            val kind = pool.entries.first { e -> (r < e.value).also { r -= e.value } }.key
+            picked += kind
+            pool.remove(kind)
+        }
+        return picked
+    }
+
+    sealed interface Reply {
+        data class Take(val kind: LessonKind) : Reply
+        data object Decline : Reply
+    }
+
+    /** Відповідь на пропозицію; null — сказали щось інше (звичайна репліка). */
+    fun reply(text: String, offers: List<LessonKind>): Reply? {
+        val t = text.lowercase().replace(Regex("[,.!?]"), " ").replace(Regex("\\s+"), " ").trim()
+        if (no.containsMatchIn(t)) return Reply.Decline
+        // Назвали урок: "про природу", "англійську", "давай історію", "писати".
+        if (englishWord.containsMatchIn(t) && !t.contains("математ")) return Reply.Take(LessonKind.ENGLISH)
+        if (t.contains("писа") || t.contains("письм") || t.contains("обвод")) return Reply.Take(LessonKind.WRITING)
+        SchoolCommands.parse("урок $t")?.let { return Reply.Take(LessonKind.of(it)) }
+        if (t.contains("природ") || t.contains("тварин")) return Reply.Take(LessonKind.WORLD)
+        if (t.contains("другий") || t.contains("друге")) offers.getOrNull(1)?.let { return Reply.Take(it) }
+        if (yes.containsMatchIn(t) || t.contains("перший") || t.contains("перше")) offers.firstOrNull()?.let { return Reply.Take(it) }
+        return null
     }
 }

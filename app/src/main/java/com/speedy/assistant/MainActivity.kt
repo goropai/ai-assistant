@@ -137,7 +137,11 @@ class MainActivity : AppCompatActivity() {
         face = FaceView(this)
         face.setOnClickListener { assistant?.manualWake() }
         face.setOnLongClickListener { openSettings(); true }
-        setContentView(face)
+        // Обличчя, а над ним — екран для уроку письма (видно лише під час уроку).
+        setContentView(android.widget.FrameLayout(this).apply {
+            addView(face, android.widget.FrameLayout.LayoutParams(-1, -1))
+            addView(traceView.apply { visibility = View.GONE }, android.widget.FrameLayout.LayoutParams(-1, -1))
+        })
 
         val needed = arrayOf(
             Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA,
@@ -202,6 +206,7 @@ class MainActivity : AppCompatActivity() {
                     assistant?.speakerName()?.let { profiles.summary(it, System.currentTimeMillis()) }.orEmpty()
                 },
                 child = { assistant?.childSpeaking() == true },
+                children = { profiles.names().filter { profiles.age(it) == com.speedy.assistant.people.Profiles.Age.CHILD } },
             ),
             camera = CameraSnapshot(this, this),
             robot = robot,
@@ -265,6 +270,13 @@ class MainActivity : AppCompatActivity() {
             onGuard = { on -> runOnUiThread { setGuardMode(on) } },
             onLesson = { on -> runOnUiThread { lessonMode = on; updatePresence() } },
             recordSound = { seconds -> com.speedy.assistant.voice.SoundClip.record(this, seconds) },
+            hearsAudio = { settings.provider == "gemini" },
+            personInFront = {
+                val now = android.os.SystemClock.uptimeMillis()
+                now - (presence?.personSeenAt ?: 0L) < 10_000 || people.someoneClose(now, 10_000)
+            },
+            personInPhoto = { jpeg -> presence?.personIn(jpeg) },
+            tracer = tracer,
             generateJson = { system, prompt -> llm.generateJson(system, prompt) },
             school = com.speedy.assistant.school.SchoolProgress(java.io.File(filesDir, "school.json")),
             hasFileAccess = ::hasFileAccess,
@@ -499,6 +511,30 @@ class MainActivity : AppCompatActivity() {
         )
     }
     private var nightMode = false
+
+    private val traceView by lazy { com.speedy.assistant.face.TraceView(this) }
+
+    /** Урок письма: показати обрис, дочекатися обведення (або [idleMs] без дотиків). */
+    private val tracer = object : com.speedy.assistant.school.Tracer {
+        override suspend fun trace(target: String, idleMs: Long): Boolean = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            val done = kotlinx.coroutines.CompletableDeferred<Boolean>()
+            var lastTouch = android.os.SystemClock.uptimeMillis()
+            traceView.onDone = { done.complete(true) }
+            traceView.onTouched = { lastTouch = android.os.SystemClock.uptimeMillis() }
+            face.showPicture(listOf(emptyList())) // очі меншають і йдуть угору
+            traceView.show(target)
+            while (!done.isCompleted) {
+                if (android.os.SystemClock.uptimeMillis() - lastTouch > idleMs) return@withContext false
+                kotlinx.coroutines.withTimeoutOrNull(500) { done.await() }
+            }
+            delay(700) // хай побачить повністю обведене
+            true
+        }
+
+        override fun hide() {
+            runOnUiThread { traceView.clear(); face.showPicture(null) }
+        }
+    }
 
     private val guardAlerts by lazy { com.speedy.assistant.guard.Alerts(this, http, settings) }
     private var guardMode: com.speedy.assistant.guard.GuardMode? = null

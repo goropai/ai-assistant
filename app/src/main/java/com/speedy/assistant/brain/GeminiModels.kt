@@ -87,7 +87,8 @@ class GeminiModels(
         fun suitable(name: String): Boolean {
             val n = name.lowercase()
             if (!n.startsWith("gemini")) return false // gemma та інші — без systemInstruction/JSON
-            val excluded = listOf("embedding", "image", "tts", "audio", "live", "vision", "aqa", "robotics", "computer-use", "exp-")
+            // transcribe — розпізнавач мовлення, banana — малює зображення: розмовляти не вміють.
+            val excluded = listOf("embedding", "image", "tts", "audio", "live", "vision", "aqa", "robotics", "computer-use", "exp-", "transcribe", "banana")
             return excluded.none { it in n }
         }
 

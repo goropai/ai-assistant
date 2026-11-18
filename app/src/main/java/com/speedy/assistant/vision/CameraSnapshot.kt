@@ -27,13 +27,27 @@ class CameraSnapshot(
     private val context: Context,
     private val owner: LifecycleOwner,
 ) {
-    /** 768 px по довшій стороні — ~560 токенів зображення; деталей для розмови досить. */
-    suspend fun take(front: Boolean, maxSide: Int = 768): ByteArray = withContext(Dispatchers.Main) {
+    /**
+     * 768 px по довшій стороні — ~560 токенів зображення; деталей для розмови досить.
+     * [quick] — малий кадр без спалаху (лише для локального детектора: повні 13 Мп на J5 — десятки секунд,
+     * а спалах у темній кімнаті блимав би щоразу).
+     */
+    suspend fun take(front: Boolean, maxSide: Int = 768, quick: Boolean = false): ByteArray = withContext(Dispatchers.Main) {
         val provider = awaitProvider()
         val capture = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             // У темряві камера сама вмикає спалах (якщо він є в цієї камери), при світлі — ні.
-            .setFlashMode(ImageCapture.FLASH_MODE_AUTO)
+            .setFlashMode(if (quick) ImageCapture.FLASH_MODE_OFF else ImageCapture.FLASH_MODE_AUTO)
+            .apply {
+                if (quick) setResolutionSelector(
+                    androidx.camera.core.resolutionselector.ResolutionSelector.Builder().setResolutionStrategy(
+                        androidx.camera.core.resolutionselector.ResolutionStrategy(
+                            android.util.Size(640, 480),
+                            androidx.camera.core.resolutionselector.ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                        ),
+                    ).build(),
+                )
+            }
             .build()
         val selector = if (front) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
 
