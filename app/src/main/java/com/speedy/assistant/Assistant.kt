@@ -1893,9 +1893,43 @@ class Assistant(
     /** Пошук відео в мережі (YouTube, якщо встановлений, інакше NewPipe чи браузер). */
     private suspend fun openOnline(title: String) {
         face.setMood(Mood.HAPPY)
-        val app = onlineVideo?.search(title)
-        Log.i(TAG, "відео в мережі: «$title» → $app")
-        say(if (app == null) "Не маю чим відкрити відео з інтернету." else "Шукаю «$title» у $app.")
+        val opened = onlineVideo?.search(title)
+        Log.i(TAG, "відео в мережі: «$title» → ${opened?.name}")
+        say(if (opened == null) "Не маю чим відкрити відео з інтернету." else "Шукаю «$title» у ${opened.name}.")
+        // NewPipe лише шукає — перше відео вмикаємо самі (якщо дозволено керувати застосунками).
+        val pkg = opened?.newPipe ?: return
+        val hands = com.speedy.assistant.phone.SpeedyHands.instance ?: run { Log.i(TAG, "NewPipe: керування застосунками вимкнено — лишаю список"); return }
+        playNewPipeResult(hands, pkg, title)
+    }
+
+    /**
+     * NewPipe показав результати — натиснути перше відео (відкривається й грає саме). "Вміст недоступний"
+     * (дитячі відео YouTube NewPipe часто не відтворює) — назад і наступне, до [NEWPIPE_TRIES].
+     */
+    private suspend fun playNewPipeResult(hands: com.speedy.assistant.phone.SpeedyHands, pkg: String, query: String) {
+        val ready = kotlinx.coroutines.withTimeoutOrNull(NEWPIPE_RESULTS_MS) {
+            while (!hands.newPipeResults(pkg, query)) delay(500)
+            true
+        }
+        if (ready == null) run { Log.i(TAG, "NewPipe: результатів пошуку не дочекалась"); return }
+        delay(500) // список домальовується
+        repeat(NEWPIPE_TRIES) { i ->
+            val video = hands.pickNewPipeResult(pkg, i) ?: run { Log.i(TAG, "NewPipe: більше відео в списку немає"); return }
+            // Відкривається кілька секунд: або грає, або панель помилки.
+            val failed = kotlinx.coroutines.withTimeoutOrNull(NEWPIPE_OPEN_MS) {
+                while (!hands.newPipeError(pkg)) delay(700)
+                true
+            } == true
+            if (!failed) run { Log.i(TAG, "NewPipe: увімкнула «$video»"); return }
+            if (i == NEWPIPE_TRIES - 1 && hands.newPipeOpenInBrowser(pkg)) {
+                Log.i(TAG, "NewPipe: «$video» недоступне — відкриваю в браузері")
+                return say("У NewPipe ці відео не відкриваються, тож вмикаю в браузері.")
+            }
+            Log.i(TAG, "NewPipe: «$video» недоступне — пробую наступне")
+            hands.back()
+            delay(1_500)
+        }
+        say("Ці відео в NewPipe не відкриваються. Вибери інше в списку.")
     }
 
     /** "Продовж дивитись" / "наступна серія": останнє того виду — з місця, де зупинились. */
@@ -2739,6 +2773,12 @@ class Assistant(
             face.setMood(Mood.SLEEPY)
         }
     }
+        /** "Що змінилось у кімнаті?" — за стільки часу. */
+        const val THING_CHANGES_MS = 24 * 3600_000L
+        /** NewPipe: скільки чекати результатів пошуку, відкриття відео і скільки відео пробувати. */
+        const val NEWPIPE_RESULTS_MS = 15_000L
+        const val NEWPIPE_OPEN_MS = 10_000L
+        const val NEWPIPE_TRIES = 3
 
     private companion object {
         const val TAG = "Assistant"

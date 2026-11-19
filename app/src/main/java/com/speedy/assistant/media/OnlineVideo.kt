@@ -16,12 +16,15 @@ import android.util.Log
  */
 class OnlineVideo(private val context: Context) {
 
-    /** Відкрити пошук; повертає назву застосунку для відповіді або null — нічим відкрити. */
-    fun search(query: String): String? {
+    /** Чим відкрили: назва для відповіді і пакет NewPipe (чи форку), якщо там — тоді результат можна натиснути. */
+    class Opened(val name: String, val newPipe: String? = null)
+
+    /** Відкрити пошук; null — нічим відкрити. */
+    fun search(query: String): Opened? {
         if (installed(YOUTUBE)) {
             val intent = Intent(Intent.ACTION_SEARCH).setPackage(YOUTUBE)
                 .putExtra(SearchManager.QUERY, query).putExtra("query", query)
-            if (start(intent)) return "YouTube"
+            if (start(intent)) return Opened("YouTube")
         }
         // NewPipe і його форки (Tubular) — той самий головний екран із пошуком.
         for (pkg in NEWPIPES.filter(::installed)) {
@@ -33,12 +36,12 @@ class OnlineVideo(private val context: Context) {
             if (start(intent)) {
                 // Холодний старт NewPipe запит ігнорує (бере його лише в onNewIntent) — ще раз, коли вже відкритий.
                 Handler(Looper.getMainLooper()).postDelayed({ start(intent) }, NEWPIPE_RETRY_MS)
-                return "NewPipe"
+                return Opened("NewPipe", pkg)
             }
         }
         // Посилання на пошук YouTube: відкриє інший встановлений клієнт, що його приймає, або браузер.
         val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://m.youtube.com/results?search_query=" + Uri.encode(query)))
-        return if (start(web)) "інтернеті" else null
+        return if (start(web)) Opened("інтернеті") else null
     }
 
     private fun installed(pkg: String): Boolean = try {

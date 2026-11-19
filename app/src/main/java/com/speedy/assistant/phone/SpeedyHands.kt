@@ -134,6 +134,39 @@ class SpeedyHands : AccessibilityService() {
     }
 
     /** Ввести текст у поле, де курсор (або перше поле вводу). */
+    /** Видимі елементи з ідентифікатором [id] в активному вікні застосунку [pkg]. */
+    private fun byId(pkg: String, id: String): List<AccessibilityNodeInfo> {
+        val root = rootInActiveWindow?.takeIf { it.packageName?.toString() == pkg } ?: return emptyList()
+        return root.findAccessibilityNodeInfosByViewId("$pkg:id/$id").filter { it.isVisibleToUser }
+    }
+
+    /** NewPipe (чи форк) показує результати саме цього пошуку (а не головну сторінку). */
+    fun newPipeResults(pkg: String, query: String): Boolean =
+        byId(pkg, "toolbar_search_edit_text").any { it.text?.toString()?.trim().equals(query.trim(), ignoreCase = true) } &&
+            byId(pkg, "itemRoot").isNotEmpty()
+
+    /**
+     * NewPipe: натиснути [index]-те відео в результатах (без прямих трансляцій — у них немає тривалості
+     * на кшталт "11:19"). Повертає назву відео, null — такого немає.
+     */
+    fun pickNewPipeResult(pkg: String, index: Int): String? {
+        val videos = byId(pkg, "itemRoot").filter { item ->
+            item.findAccessibilityNodeInfosByViewId("$pkg:id/itemDurationView")
+                .any { d -> d.text?.toString()?.contains(':') == true }
+        }
+        val item = videos.getOrNull(index) ?: return null
+        val title = item.findAccessibilityNodeInfosByViewId("$pkg:id/itemVideoTitleView").firstOrNull()?.text?.toString().orEmpty()
+        Log.i(TAG, "NewPipe: натискаю результат ${index + 1}: «$title»")
+        return title.takeIf { item.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+    }
+
+    /** NewPipe не зміг відкрити відео ("Вміст недоступний" — часто дитячі відео YouTube). */
+    fun newPipeError(pkg: String): Boolean = byId(pkg, "error_panel").isNotEmpty()
+
+    /** На панелі помилки NewPipe — "Відкрити в браузері" (мобільний YouTube такі відео показує). */
+    fun newPipeOpenInBrowser(pkg: String): Boolean =
+        byId(pkg, "error_open_in_browser").firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+
     fun type(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
         var field = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable }
