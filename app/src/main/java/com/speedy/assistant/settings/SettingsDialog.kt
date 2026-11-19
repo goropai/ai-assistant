@@ -110,6 +110,30 @@ object SettingsDialog {
             isChecked = settings.factsEnabled
         }
         form.addView(facts)
+        val things = CheckBox(context).apply {
+            text = "Пам'ятати, що де лежить (фото кімнати моделі — до 4 разів на годину, коли сцена змінилась і нікого немає)"
+            isChecked = settings.thingsEnabled
+        }
+        form.addView(things)
+        val thingsPaid = CheckBox(context).apply {
+            text = "Фото кімнати — лише ключем з оплатою"
+            isChecked = settings.thingsPaidOnly
+            setOnCheckedChangeListener { box, checked ->
+                if (checked) return@setOnCheckedChangeListener
+                AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
+                    .setTitle("Фото безкоштовним ключем?")
+                    .setMessage(
+                        "Фото кімнати оброблятиме безкоштовний ключ Gemini. Google може використовувати дані безкоштовного " +
+                            "рівня для покращення своїх продуктів, і їх можуть переглядати люди — тобто фото стануть " +
+                            "доступні третім особам. Без ключа з оплатою Спіді тоді надсилатиме фото кімнати саме так."
+                    )
+                    .setPositiveButton("Так, дозволити") { _, _ -> }
+                    .setNegativeButton("Ні, лише з оплатою") { _, _ -> box.isChecked = true }
+                    .setOnCancelListener { box.isChecked = true }
+                    .show()
+            }
+        }
+        form.addView(thingsPaid)
         val offers = CheckBox(context).apply {
             text = "Пропонувати дітям уроки (не частіше ніж раз на 2 год)"
             isChecked = settings.lessonOffers
@@ -275,6 +299,8 @@ object SettingsDialog {
                 family?.let { f -> genders.forEach { (name, g) -> if (g != com.speedy.assistant.people.Gender.UNKNOWN && g != f.gender(name)) f.setGender(name, g) } }
                 settings.appearanceEnabled = appearance.isChecked
                 settings.factsEnabled = facts.isChecked
+                settings.thingsEnabled = things.isChecked
+                settings.thingsPaidOnly = thingsPaid.isChecked
                 settings.lessonOffers = offers.isChecked
                 settings.lessonWeights = com.speedy.assistant.school.LessonKind.save(weights)
                 saveGuard()

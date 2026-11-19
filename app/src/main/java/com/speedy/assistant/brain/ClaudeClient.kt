@@ -139,14 +139,20 @@ class ClaudeClient(
         }
     }
 
-    override suspend fun generateJson(system: String, prompt: String): String? = withContext(Dispatchers.IO) {
+    override suspend fun generateJson(system: String, prompt: String, image: ByteArray?): String? = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("model", model)
             .put("max_tokens", 2048)
             .put("system", system)
             .put("output_config", JSONObject().put("effort", "low"))
             .apply { if (effort in NO_THINKING_EFFORTS) put("thinking", JSONObject().put("type", "between_tools")) }
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", prompt)))
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", JSONArray().apply {
+                image?.let {
+                    put(JSONObject().put("type", "image").put("source", JSONObject().put("type", "base64")
+                        .put("media_type", "image/jpeg").put("data", android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP))))
+                }
+                put(JSONObject().put("type", "text").put("text", prompt))
+            })))
         val request = Request.Builder()
             .url("https://api.anthropic.com/v1/messages")
             .header("x-api-key", apiKey)

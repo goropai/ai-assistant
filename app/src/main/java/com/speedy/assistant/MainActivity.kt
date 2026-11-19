@@ -176,6 +176,9 @@ class MainActivity : AppCompatActivity() {
         // PDFBox бере шрифти й таблиці гліфів із ресурсів застосунку (для тексту PDF-книг).
         com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
         presence = PresenceWatcher(this, this, people, pets, profiles) { events -> assistant?.onPresence(events) }
+        val thingMemory = com.speedy.assistant.things.ThingMemory(java.io.File(filesDir, "things.json"))
+        // Кімната змінилась — Спіді (тихо) оглядає її для пам'яті речей.
+        presence?.onThumb = { thumb, person -> runOnUiThread { assistant?.sceneFrame(thumb, person) } }
         guardMode = com.speedy.assistant.guard.GuardMode(
             scope = lifecycleScope,
             alerts = guardAlerts,
@@ -209,6 +212,7 @@ class MainActivity : AppCompatActivity() {
                 },
                 child = { assistant?.childSpeaking() == true },
                 children = { profiles.names().filter { profiles.age(it) == com.speedy.assistant.people.Profiles.Age.CHILD } },
+                things = { if (settings.thingsEnabled) thingMemory.summary(8) else "" },
             ),
             camera = CameraSnapshot(this, this),
             robot = robot,
@@ -279,6 +283,8 @@ class MainActivity : AppCompatActivity() {
             },
             personInPhoto = { jpeg -> presence?.personIn(jpeg) },
             tracer = tracer,
+            things = thingMemory,
+            lookJson = { system, prompt, jpeg -> llm.generateJson(system, prompt, jpeg, paidOnly = settings.thingsPaidOnly) },
             generateJson = { system, prompt -> llm.generateJson(system, prompt) },
             school = com.speedy.assistant.school.SchoolProgress(java.io.File(filesDir, "school.json")),
             hasFileAccess = ::hasFileAccess,
@@ -350,18 +356,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
         // VLC: місце в аудіокнизі, наступний файл, слух вимкнено, поки грає.
+        // Відео в іншому застосунку зупинилось і ніхто нічого не робить — Спіді повертається на екран.
         lifecycleScope.launch {
             while (isActive) {
                 delay(5_000)
                 assistant?.mediaTick()
+                checkIdleVideo()
             }
         }
-        // Відео в іншому застосунку зупинилось і ніхто нічого не робить — Спіді повертається на екран.
         lifecycleScope.launch {
             while (isActive) {
                 delay(60_000)
                 val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                checkIdleVideo()
                 val near = presence?.summary.orEmpty().isNotBlank()
                 assistant?.checkDesires(hour, near, batteryPercent, charging)
             }
@@ -581,12 +587,6 @@ class MainActivity : AppCompatActivity() {
         else watcher.stop()
     }
 
-    /** Спіді не на екрані, але керує застосунками — її міні-копія в кутку. */
-    private fun showMiniSpeedy() {
-        val hands = com.speedy.assistant.phone.SpeedyHands.instance ?: return
-        hands.showMini(
-            create = { ctx -> FaceView(ctx).also { face.mirror = it } },
-            onTap = {
     private val videoIdle = com.speedy.assistant.media.VideoIdle()
 
     /**
@@ -618,6 +618,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Спіді не на екрані, але керує застосунками — її міні-копія в кутку. */
+    private fun showMiniSpeedy() {
+        val hands = com.speedy.assistant.phone.SpeedyHands.instance ?: return
+        hands.showMini(
+            create = { ctx -> FaceView(ctx).also { face.mirror = it } },
+            onTap = {
                 startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
             },
         )
@@ -699,6 +705,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         // Спіді закрили (змахнули з недавніх) — міні-копія служби не лишається висіти.
         hideMiniSpeedy()
+        com.speedy.assistant.phone.SpeedyHands.onConnected = null
         if (assistant != null) {
             unregisterReceiver(batteryReceiver)
             if (BuildConfig.DEBUG) unregisterReceiver(debugReceiver)
@@ -727,7 +734,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-        com.speedy.assistant.phone.SpeedyHands.onConnected = null
 
     private companion object {
         const val DEBUG_HEAR = "com.speedy.assistant.debug.HEAR"

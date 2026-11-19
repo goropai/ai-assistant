@@ -134,17 +134,6 @@ class SpeedyHands : AccessibilityService() {
         return false
     }
 
-    fun scroll(forward: Boolean): Boolean {
-        val root = rootInActiveWindow ?: return false
-        var target: AccessibilityNodeInfo? = null
-        walk(root) { n -> if (target == null && n.isScrollable) target = n }
-        Log.i(TAG, "прокручую ${if (forward) "вниз" else "вгору"} у ${currentApp()}")
-        return target?.performAction(
-            if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
-        ) ?: false
-    }
-
-    /** Ввести текст у поле, де курсор (або перше поле вводу). */
     /** Видимі елементи з ідентифікатором [id] в активному вікні застосунку [pkg]. */
     private fun byId(pkg: String, id: String): List<AccessibilityNodeInfo> {
         val root = rootInActiveWindow?.takeIf { it.packageName?.toString() == pkg } ?: return emptyList()
@@ -178,6 +167,17 @@ class SpeedyHands : AccessibilityService() {
     fun newPipeOpenInBrowser(pkg: String): Boolean =
         byId(pkg, "error_open_in_browser").firstOrNull()?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
 
+    fun scroll(forward: Boolean): Boolean {
+        val root = rootInActiveWindow ?: return false
+        var target: AccessibilityNodeInfo? = null
+        walk(root) { n -> if (target == null && n.isScrollable) target = n }
+        Log.i(TAG, "прокручую ${if (forward) "вниз" else "вгору"} у ${currentApp()}")
+        return target?.performAction(
+            if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        ) ?: false
+    }
+
+    /** Ввести текст у поле, де курсор (або перше поле вводу). */
     fun type(text: String): Boolean {
         val root = rootInActiveWindow ?: return false
         var field = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable }
@@ -190,15 +190,6 @@ class SpeedyHands : AccessibilityService() {
 
     private var overlay: android.view.View? = null
     private var overlayParams: android.view.WindowManager.LayoutParams? = null
-
-    /**
-     * Міні-копія Спіді в кутку поверх будь-якого застосунку. Дотик — повернути Спіді,
-     * перетягування — посунути. [create] отримує контекст служби (вікно мусить бути її).
-     */
-    fun showMini(create: (Context) -> android.view.View, onTap: () -> Unit) {
-        if (overlay != null) return
-        val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
-        val density = resources.displayMetrics.density
     /** Куди міні-Спіді поставили (перетягуванням); фактично може стояти нижче — під відео. */
     private var userY = 0
     private var lastVideo: Box? = null
@@ -256,6 +247,15 @@ class SpeedyHands : AccessibilityService() {
             Box(maxOf(r.left, 0), maxOf(r.top, 0), minOf(r.right, screen.right), minOf(r.bottom, screen.bottom))
         }.filter { it.width > 0 && it.height > 0 && it.area >= screen.area / 10 }.maxByOrNull { it.area }
     }
+
+    /**
+     * Міні-копія Спіді в кутку поверх будь-якого застосунку. Дотик — повернути Спіді,
+     * перетягування — посунути. [create] отримує контекст служби (вікно мусить бути її).
+     */
+    fun showMini(create: (Context) -> android.view.View, onTap: () -> Unit) {
+        if (overlay != null) return
+        val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
+        val density = resources.displayMetrics.density
         val params = android.view.WindowManager.LayoutParams(
             (140 * density).toInt(), (90 * density).toInt(),
             android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -281,6 +281,7 @@ class SpeedyHands : AccessibilityService() {
         var startX = 0
         var startY = 0
         var moved = false
+        userY = params.y
         view.setOnTouchListener { _, e ->
             when (e.action) {
                 android.view.MotionEvent.ACTION_DOWN -> {
@@ -290,10 +291,10 @@ class SpeedyHands : AccessibilityService() {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 12 * density) moved = true
-        userY = params.y
                     if (moved) {
                         params.x = (startX - dx).toInt() // gravity END: x рахується від правого краю
                         params.y = (startY + dy).toInt()
+                        userY = params.y
                         wm.updateViewLayout(view, params)
                     }
                 }
@@ -303,10 +304,10 @@ class SpeedyHands : AccessibilityService() {
         }
         if (locked()) view.visibility = android.view.View.GONE // з'явиться після розблокування
         try {
-                        userY = params.y
             wm.addView(view, params)
             overlay = view
             overlayParams = params
+            handler.postDelayed(avoidVideo, PLACE_MS)
         } catch (e: Exception) {
             Log.w(TAG, "міні-Спіді не показується: ${e.message}")
         }
@@ -315,8 +316,8 @@ class SpeedyHands : AccessibilityService() {
     fun hideMini() {
         val view = overlay ?: return
         overlay = null
+        handler.removeCallbacks(avoidVideo)
         try {
-            handler.postDelayed(avoidVideo, PLACE_MS)
             (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(view)
         } catch (_: Exception) {}
     }
@@ -325,7 +326,6 @@ class SpeedyHands : AccessibilityService() {
     fun home() = performGlobalAction(GLOBAL_ACTION_HOME)
 
     private fun walk(node: AccessibilityNodeInfo, depth: Int = 0, visit: (AccessibilityNodeInfo) -> Unit) {
-        handler.removeCallbacks(avoidVideo)
         if (depth > 40) return
         visit(node)
         for (i in 0 until node.childCount) node.getChild(i)?.let { walk(it, depth + 1, visit) }
@@ -335,17 +335,17 @@ class SpeedyHands : AccessibilityService() {
         private const val TAG = "SpeedyHands"
         @Volatile var instance: SpeedyHands? = null
             private set
+        /** Служба (знову) підключилась — показати міні-Спіді, якщо Спіді не на екрані. */
+        var onConnected: (() -> Unit)? = null
+        private const val PLACE_MS = 1_000L
+        /** Ідентифікатори вікна відео: NewPipe ("surfaceView"), ExoPlayer, VLC тощо. */
+        private val VIDEO_IDS = listOf("surfaceView", "surface_view", "texture_view", "video_view", "player_view", "exo_content_frame", "player_surface")
 
         fun enabled(context: Context): Boolean =
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
                 .contains(context.packageName + "/")
     }
 }
-        /** Служба (знову) підключилась — показати міні-Спіді, якщо Спіді не на екрані. */
-        var onConnected: (() -> Unit)? = null
-        private const val PLACE_MS = 1_000L
-        /** Ідентифікатори вікна відео: NewPipe ("surfaceView"), ExoPlayer, VLC тощо. */
-        private val VIDEO_IDS = listOf("surfaceView", "surface_view", "texture_view", "video_view", "player_view", "exo_content_frame", "player_surface")
 
 /** Де Спіді нічого не натискає й не вводить: гроші, паролі, налаштування, встановлення програм. */
 object Safety {

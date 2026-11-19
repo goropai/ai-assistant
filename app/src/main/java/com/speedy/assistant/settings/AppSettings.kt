@@ -105,6 +105,16 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("lesson_offers", true)
         set(value) = prefs.edit().putBoolean("lesson_offers", value).apply()
 
+    /** Пам'ять "що де лежить": огляд кімнати моделлю за фото, коли сцена змінилась. */
+    var thingsEnabled: Boolean
+        get() = prefs.getBoolean("things", true)
+        set(value) = prefs.edit().putBoolean("things", value).apply()
+
+    /** Фото кімнати — лише ключем з оплатою (безкоштовний: Google може використати фото й показати людям). */
+    var thingsPaidOnly: Boolean
+        get() = prefs.getBoolean("things_paid_only", true)
+        set(value) = prefs.edit().putBoolean("things_paid_only", value).apply()
+
     /** Час від часу цікаві факти під інтереси знайомих. */
     var factsEnabled: Boolean
         get() = prefs.getBoolean("facts", true)

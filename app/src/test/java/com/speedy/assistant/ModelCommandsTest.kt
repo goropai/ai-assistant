@@ -31,6 +31,11 @@ class ModelCommandsTest {
         if (GuardCommands.parse(command) == true) return true // лише ввімкнути
         if (SchoolCommands.parse(command) != null) return true
         if (News.isRequest(command)) return true
+        when (com.speedy.assistant.things.ThingCommands.parse(command)) {
+            null -> {}
+            com.speedy.assistant.things.ThingCommands.Command.Forget -> return false
+            else -> return true
+        }
         if (TranslateCommands.parse(command) != null) return true
         if (MediaCommands.parse(command) != null) return true
         if (BookCommands.parse(command) != null) return true
@@ -60,13 +65,14 @@ class ModelCommandsTest {
             "урок математики", "урок логіки", "урок про навколишній світ", "математика англійською",
             "урок української мови", "урок історії", "урок математики для Ліни",
             "огляд новин", "скасуй нагадування", "яке повітря", "де ти", "вартуй",
+            "де мої окуляри", "що змінилось у кімнаті",
         ).forEach { assertTrue("модель скаже «$it», а Спіді не зрозуміє", understood(it)) }
     }
 
     @Test
     fun forbiddenStayForbidden() {
         // Налаштування, PIN, знайомства, оновлення — моделі ні.
-        listOf("зміни пін-код", "мене звати Тарас", "забудь мене", "оновись", "це дитина", "досить вартувати").forEach {
+        listOf("зміни пін-код", "мене звати Тарас", "забудь мене", "оновись", "це дитина", "досить вартувати", "забудь, що де лежить").forEach {
             assertTrue("«$it» не має виконуватися від моделі", !understood(it))
         }
     }

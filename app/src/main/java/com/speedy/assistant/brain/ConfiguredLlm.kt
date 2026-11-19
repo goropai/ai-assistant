@@ -44,7 +44,28 @@ class ConfiguredLlm(
 
     override suspend fun search(query: String): String? = firstNonNull { it.search(query) }
 
-    override suspend fun generateJson(system: String, prompt: String): String? = firstNonNull { it.generateJson(system, prompt) }
+    override suspend fun generateJson(system: String, prompt: String, image: ByteArray?): String? =
+        generateJson(system, prompt, image, paidOnly = false)
+
+    /**
+     * JSON за інструкцією; [paidOnly] — лише ключем з оплатою (Claude — теж з оплатою): фото кімнати
+     * безкоштовним ключем не надсилаємо, якщо так налаштовано. Немає такого ключа — null.
+     */
+    suspend fun generateJson(system: String, prompt: String, image: ByteArray?, paidOnly: Boolean): String? {
+        val all = keys()
+        // Загальне правило "фото й звук — не безкоштовним" діє, лише якщо ключ з оплатою є.
+        val strict = paidOnly || (image != null && settings.geminiFreeNoMedia && all.any { !it.free })
+        val allowed = all.filter { !(strict && it.free) }
+        if (allowed.isEmpty()) {
+            if (all.isNotEmpty()) Log.i(TAG, "немає ключа з оплатою — фото не надсилаю")
+            return null
+        }
+        val now = System.currentTimeMillis()
+        for (key in allowed.filter { (exhaustedUntil[it.free] ?: 0) <= now }.ifEmpty { allowed }) {
+            key.client.generateJson(system, prompt, image)?.let { return it }
+        }
+        return null
+    }
 
     /** Стан зв'язку без витрати токенів. */
     suspend fun status(): BrainStatus {

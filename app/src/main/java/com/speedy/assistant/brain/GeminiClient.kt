@@ -187,14 +187,14 @@ class GeminiClient(
         null
     }
 
-    override suspend fun generateJson(system: String, prompt: String): String? = withContext(Dispatchers.IO) {
+    override suspend fun generateJson(system: String, prompt: String, image: ByteArray?): String? = withContext(Dispatchers.IO) {
         refreshModelList()
         for (candidate in models.order(model, now(), max = 4)) {
             val generation = JSONObject().put("responseMimeType", "application/json")
             if (GeminiModels.canDisableThinking(candidate)) generation.put("thinkingConfig", JSONObject().put("thinkingBudget", 0))
             val body = JSONObject()
                 .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system))))
-                .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
+                .put("contents", JSONArray().put(toJson(Turn(Role.USER, listOfNotNull(image?.let { Part.Image(it) }, Part.Text(prompt))))))
                 .put("generationConfig", generation)
             val request = Request.Builder().url("$BASE/models/$candidate:generateContent")
                 .header("x-goog-api-key", apiKey).post(body.toString().toRequestBody(JSON)).build()

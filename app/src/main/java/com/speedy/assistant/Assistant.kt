@@ -120,6 +120,10 @@ class Assistant(
     private val personInFront: () -> Boolean = { false },
     /** Чи є людина на знімку (задня камера); null — не розібрати. */
     private val personInPhoto: suspend (ByteArray) -> Boolean? = { null },
+    /** Пам'ять "що де лежить" (огляди кімнати моделлю). */
+    private val things: com.speedy.assistant.things.ThingMemory? = null,
+    /** JSON від моделі за фото (огляд кімнати) — з урахуванням "лише ключ з оплатою"; null — не вдалось. */
+    private val lookJson: suspend (system: String, prompt: String, jpeg: ByteArray) -> String? = { _, _, _ -> null },
     /** Екран для уроку письма (обвести пальцем обрис); null — немає. */
     private val tracer: com.speedy.assistant.school.Tracer? = null,
     /** Запит до "мозку" за JSON (уроки, цікаві факти); null — не вдалось. */
@@ -148,6 +152,9 @@ class Assistant(
     private var lastTalkAt = Long.MIN_VALUE / 2
     /** Пауза в розмові: перевірка, чи співрозмовник ще тут (див. PauseCheck). */
     private var pauseJob: Job? = null
+    /** Коли оглядати кімнату для пам'яті речей. */
+    private val sceneChange = com.speedy.assistant.things.SceneChange()
+    private var scanningThings = false
     /** Остання дія — відповідь моделі в розмові (не команда, урок чи книга). */
     private var dialogue = false
     /** У цій паузі Спіді вже заговорила сама — вдруге не заговорює, доки їй не відповідять. */
@@ -922,6 +929,9 @@ class Assistant(
             null -> {}
         }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { return schoolLesson(it, command) }
+        // "Де мої окуляри?" — з пам'яті речей; "забудь, що де лежить" — до FORGET_THAT (той узяв би це за спогад).
+        // Не пам'ятає такої речі — далі (інші розбори, модель може подивитися камерою).
+        com.speedy.assistant.things.ThingCommands.parse(command)?.let { if (handleThings(it)) return }
         // "Забудь, що я люблю drum and bass" — модель уміє лише додавати спогади, прибирає людина.
         FORGET_THAT.find(command.lowercase().trim())?.let { return forgetThat(it.groupValues[1]) }
         val cmd = LocalCommands.match(command)
@@ -1283,6 +1293,15 @@ class Assistant(
         if (com.speedy.assistant.guard.GuardCommands.parse(command) == true) { armGuard(); return true }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { schoolLesson(it, command); return true }
         if (com.speedy.assistant.news.News.isRequest(command)) { newsDigest(); return true }
+        // Пам'ять речей: питати можна, стирати — лише людина.
+        when (val thing = com.speedy.assistant.things.ThingCommands.parse(command)) {
+            null -> {}
+            com.speedy.assistant.things.ThingCommands.Command.Forget -> return false
+            else -> {
+                if (!handleThings(thing)) say("Не пам'ятаю, де це, — не бачила.")
+                return true
+            }
+        }
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return true }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return true }
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return true }
@@ -2761,6 +2780,71 @@ class Assistant(
         runAgent(reply)
     }
 
+    /** Пам'ять речей голосом. false — такої речі не пам'ятає (хай далі вирішують інші розбори чи модель). */
+    private suspend fun handleThings(cmd: com.speedy.assistant.things.ThingCommands.Command): Boolean {
+        val memory = things ?: return false
+        val now = System.currentTimeMillis()
+        when (cmd) {
+            is com.speedy.assistant.things.ThingCommands.Command.Find -> {
+                val found = memory.find(cmd.what).takeIf { it.isNotEmpty() } ?: return false
+                Log.i(TAG, "речі: «${cmd.what}» → ${found.joinToString { "${it.name} (${it.place})" }}")
+                face.setMood(Mood.HAPPY)
+                say(com.speedy.assistant.things.ThingText.found(found, now))
+            }
+            com.speedy.assistant.things.ThingCommands.Command.Changes -> say(com.speedy.assistant.things.ThingText.changes(memory.changesSince(now - THING_CHANGES_MS)))
+            com.speedy.assistant.things.ThingCommands.Command.List -> say(com.speedy.assistant.things.ThingText.list(memory.summary()))
+            com.speedy.assistant.things.ThingCommands.Command.Forget -> {
+                memory.clear()
+                say("Забула, що де лежить.")
+            }
+        }
+        return true
+    }
+
+    /** Кадр камери присутності (мініатюра): кімната змінилась і завмерла — оглянути (тихо, без слів). */
+    fun sceneFrame(thumb: IntArray, person: Boolean) {
+        if (things == null || settings?.thingsEnabled == false) return
+        if (!sceneChange.feed(thumb, System.currentTimeMillis(), person)) return
+        if (busy || scanningThings || quiet() || !isOnline()) return
+        scope.launch { scanThings(thumb) }
+    }
+
+    /** Огляд кімнати: фото спереду → модель перелічує речі й місця → пам'ять речей. */
+    private suspend fun scanThings(thumb: IntArray) {
+        val memory = things ?: return
+        scanningThings = true
+        try {
+            onBusyChanged(true) // камера присутності відпускає камеру на знімок
+            val jpeg = try {
+                delay(SETTLE_MS)
+                camera.take(front = true)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "речі: знімок не вдався", e)
+                null
+            } finally {
+                if (!busy) onBusyChanged(false)
+            }
+            val now = System.currentTimeMillis()
+            val raw = jpeg?.let {
+                try { lookJson(com.speedy.assistant.things.ThingScan.SYSTEM, com.speedy.assistant.things.ThingScan.prompt(memory.names("front")), it) }
+                catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+            }
+            val seen = raw?.let { com.speedy.assistant.things.ThingScan.parse(it) }
+            if (seen == null) {
+                sceneChange.failed(now)
+                Log.i(TAG, "речі: огляд не вдався")
+                return
+            }
+            memory.observe(seen, "front", now)
+            sceneChange.scanned(thumb, now)
+            Log.i(TAG, "речі: ${seen.size} — ${seen.take(10).joinToString { "${it.name} (${it.place})" }}")
+        } finally {
+            scanningThings = false
+        }
+    }
+
     /** Після розмови — повернутись до спокою, а згодом "задрімати". */
     private fun scheduleIdle() {
         idleJob?.cancel()
@@ -2773,12 +2857,6 @@ class Assistant(
             face.setMood(Mood.SLEEPY)
         }
     }
-        /** "Що змінилось у кімнаті?" — за стільки часу. */
-        const val THING_CHANGES_MS = 24 * 3600_000L
-        /** NewPipe: скільки чекати результатів пошуку, відкриття відео і скільки відео пробувати. */
-        const val NEWPIPE_RESULTS_MS = 15_000L
-        const val NEWPIPE_OPEN_MS = 10_000L
-        const val NEWPIPE_TRIES = 3
 
     private companion object {
         const val TAG = "Assistant"
@@ -2792,6 +2870,12 @@ class Assistant(
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 3
         const val SETTLE_MS = 300L
+        /** "Що змінилось у кімнаті?" — за стільки часу. */
+        const val THING_CHANGES_MS = 24 * 3600_000L
+        /** NewPipe: скільки чекати результатів пошуку, відкриття відео і скільки відео пробувати. */
+        const val NEWPIPE_RESULTS_MS = 15_000L
+        const val NEWPIPE_OPEN_MS = 10_000L
+        const val NEWPIPE_TRIES = 3
         /** Знімок задньою камерою для паузи в розмові — не довше (інакше перевірка розтягується). */
         const val PERSON_PHOTO_MS = 6_000L
         const val LAUNCH_CHECK_DELAY_MS = 5_000L

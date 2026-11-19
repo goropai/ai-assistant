@@ -62,6 +62,12 @@ class PresenceWatcher(
     @Volatile var scene: String = ""
         private set
 
+    /**
+     * Мініатюра кадру (яскравість 16×12) і чи є людина — для пам'яті речей (чи змінилась кімната).
+     * Викликається в потоці камери.
+     */
+    @Volatile var onThumb: ((IntArray, Boolean) -> Unit)? = null
+
     /** Коли востаннє бачила людину передньою камерою (uptimeMillis; 0 — не бачила). */
     @Volatile var personSeenAt: Long = 0
         private set
@@ -161,6 +167,7 @@ class PresenceWatcher(
                 .mapNotNull { d -> CocoNames.ua(d.cocoClass) }.distinct().take(6).joinToString(", ")
             val kinds = sightings.map { s -> s.kind }.toSet()
             if (Kind.PERSON in kinds) personSeenAt = now
+            onThumb?.let { it(thumbnail(frame), Kind.PERSON in kinds) }
             if (kinds != lastKinds) {
                 Log.i(TAG, "бачу: ${kinds.joinToString { k -> k.ua }.ifEmpty { "нікого" }} " +
                     sightings.joinToString(prefix = "(", postfix = ")") { s -> "%s %.2f".format(s.kind.ua, s.score) })
@@ -249,6 +256,17 @@ class PresenceWatcher(
             Log.e(TAG, "face recognizer init failed, faces disabled", e)
             facesBroken = true
             null
+        }
+    }
+
+    private fun thumbnail(frame: Bitmap): IntArray {
+        val w = com.speedy.assistant.things.SceneChange.W
+        val h = com.speedy.assistant.things.SceneChange.H
+        val small = Bitmap.createScaledBitmap(frame, w, h, true)
+        val pixels = IntArray(w * h).also { small.getPixels(it, 0, w, 0, 0, w, h) }
+        return IntArray(pixels.size) { i ->
+            val c = pixels[i]
+            ((c shr 16 and 0xff) * 3 + (c shr 8 and 0xff) * 6 + (c and 0xff)) / 10
         }
     }
 
