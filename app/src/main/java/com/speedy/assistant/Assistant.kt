@@ -2630,7 +2630,7 @@ class Assistant(
 
     private suspend fun announceUpdate(info: UpdateInfo) {
         face.setMood(Mood.SURPRISED)
-        val notes = info.notes.takeIf { it.isNotBlank() }?.let { " Що нового: $it." }.orEmpty()
+        val notes = info.notes.trim().trimEnd('.', '!', ' ').takeIf { it.isNotBlank() }?.let { " Що нового: $it." }.orEmpty()
         say("Є нова версія ${info.versionName}!$notes Скажи «оновись», і я встановлю її.")
         // Чекаємо відповіді: "оновись" і без "Спіді" (раніше таке ігнорувала).
         inConversation = true
