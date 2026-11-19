@@ -356,10 +356,12 @@ class MainActivity : AppCompatActivity() {
                 assistant?.mediaTick()
             }
         }
+        // Відео в іншому застосунку зупинилось і ніхто нічого не робить — Спіді повертається на екран.
         lifecycleScope.launch {
             while (isActive) {
                 delay(60_000)
                 val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+                checkIdleVideo()
                 val near = presence?.summary.orEmpty().isNotBlank()
                 assistant?.checkDesires(hour, near, batteryPercent, charging)
             }
@@ -585,6 +587,37 @@ class MainActivity : AppCompatActivity() {
         hands.showMini(
             create = { ctx -> FaceView(ctx).also { face.mirror = it } },
             onTap = {
+    private val videoIdle = com.speedy.assistant.media.VideoIdle()
+
+    /**
+     * Спіді у фоні (міні-копія), в іншому застосунку відео стоїть [VideoIdle.IDLE_MS] без реакції —
+     * зупинити той плеєр і повернути Спіді на весь екран.
+     */
+    private fun checkIdleVideo() {
+        val hands = com.speedy.assistant.phone.SpeedyHands.instance
+        if (resumed || hands == null || assistant == null) return videoIdle.reset()
+        val top = hands.topPackage()
+        val sessions = try {
+            (getSystemService(MEDIA_SESSION_SERVICE) as android.media.session.MediaSessionManager)
+                .getActiveSessions(android.content.ComponentName(this, com.speedy.assistant.phone.SpeedyNotifications::class.java))
+                .filter { it.packageName == top }
+        } catch (e: SecurityException) {
+            return videoIdle.reset() // немає доступу до сповіщень — не бачимо, чи грає
+        }
+        val playing = sessions.any {
+            it.playbackState?.state.let { s -> s == android.media.session.PlaybackState.STATE_PLAYING || s == android.media.session.PlaybackState.STATE_BUFFERING }
+        }
+        if (!videoIdle.update(android.os.SystemClock.uptimeMillis(), top, playing, hands.lastUserActionAt)) return
+        android.util.Log.i("MainActivity", "відео в $top стоїть без реакції — повертаю Спіді на екран")
+        sessions.forEach { try { it.transportControls.stop() } catch (_: Exception) {} }
+        // Samsung із фону startActivity переносить задачу, але знову відновлює той застосунок — тож задачу наперед.
+        try {
+            (getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).moveTaskToFront(taskId, 0)
+        } catch (e: SecurityException) {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
+    }
+
                 startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
             },
         )

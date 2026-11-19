@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Повернути Спіді на екран із фону (відео в іншому застосунку скінчилось): startActivity там не діє. -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
     <!-- Погода й "де ми": GPS і мережеве визначення місця -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

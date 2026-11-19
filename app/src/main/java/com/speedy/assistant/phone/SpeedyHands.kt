@@ -50,9 +50,18 @@ class SpeedyHands : AccessibilityService() {
     private fun locked() = (getSystemService(KEYGUARD_SERVICE) as android.app.KeyguardManager).isKeyguardLocked
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event?.packageName?.toString()?.takeIf { event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED }
-            ?.let { foreground = it }
+        val pkg = event?.packageName?.toString() ?: return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) foreground = pkg
+        // Натиснули чи гортають в іншому застосунку — людина там щось робить (див. VideoIdle).
+        else if (pkg != packageName) lastUserActionAt = android.os.SystemClock.uptimeMillis()
     }
+
+    /** Коли востаннє натискали чи гортали в іншому застосунку (uptimeMillis). */
+    @Volatile var lastUserActionAt = 0L
+        private set
+
+    /** Пакет застосунку на екрані зараз. */
+    fun topPackage(): String? = rootInActiveWindow?.packageName?.toString() ?: foreground.ifEmpty { null }
 
     override fun onInterrupt() {}
 
