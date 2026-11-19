@@ -31,8 +31,8 @@ android {
         applicationId = "com.speedy.assistant"
         minSdk = 25 // Android 7.1
         targetSdk = 34
-        versionCode = 19
-        versionName = "0.16.1"
+        versionCode = 20
+        versionName = "0.16.2"
 
         // Нативні бібліотеки (TensorFlow Lite, ML Kit) лише 32-бітні ARM: телефон Спіді — armeabi-v7a,
         // а 64-бітні ARM-телефони їх теж запускають. Мінус ~12 МБ у кожному оновленні.
