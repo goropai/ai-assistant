@@ -18,6 +18,8 @@ class SpeedyHands : AccessibilityService() {
     override fun onServiceConnected() {
         instance = this
         Log.i(TAG, "керування застосунками увімкнено")
+        // Службу перезапустили (система, оновлення, uiautomator) — міні-Спіді зникла разом зі старою.
+        onConnected?.invoke()
         registerReceiver(screenReceiver, android.content.IntentFilter().apply {
             addAction(android.content.Intent.ACTION_SCREEN_OFF)
             addAction(android.content.Intent.ACTION_USER_PRESENT)
@@ -188,6 +190,63 @@ class SpeedyHands : AccessibilityService() {
         if (overlay != null) return
         val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
         val density = resources.displayMetrics.density
+    /** Куди міні-Спіді поставили (перетягуванням); фактично може стояти нижче — під відео. */
+    private var userY = 0
+    private var lastVideo: Box? = null
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val avoidVideo = object : Runnable {
+        override fun run() {
+            try { placeMini() } catch (e: Exception) { Log.w(TAG, "міні-Спіді: ${e.message}") }
+            handler.postDelayed(this, PLACE_MS)
+        }
+    }
+
+    private val statusBar: Int by lazy {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (id > 0) resources.getDimensionPixelSize(id) else 0
+    }
+
+    /** Грає відео — не перекривати: під нього чи над ним; на весь екран — напівпрозора. */
+    private fun placeMini() {
+        val view = overlay ?: return
+        val params = overlayParams ?: return
+        val wm = getSystemService(WINDOW_SERVICE) as android.view.WindowManager
+        val size = android.graphics.Point().also { wm.defaultDisplay.getRealSize(it) }
+        val screen = Box(0, 0, size.x, size.y)
+        // Вікно служби рахує y від низу рядка стану.
+        val top = userY + statusBar
+        val mini = Box(size.x - params.x - params.width, top, size.x - params.x, top + params.height)
+        val video = videoBox(screen)
+        val place = MiniPlacement.place(mini, video, screen, statusBar, (12 * resources.displayMetrics.density).toInt())
+        if (video != lastVideo) {
+            lastVideo = video
+            Log.i(TAG, "міні-Спіді: відео ${video ?: "немає"} → y ${place.top}, прозорість ${place.alpha}")
+        }
+        val y = place.top - statusBar
+        if (y != params.y) {
+            params.y = y
+            wm.updateViewLayout(view, params)
+        }
+        if (view.alpha != place.alpha) view.alpha = place.alpha
+    }
+
+    /**
+     * Найбільше вікно відео в застосунку на екрані; null — немає. Шукаємо за типовими ідентифікаторами
+     * (NewPipe, ExoPlayer…) — обхід дерева їх не завжди бачить — і за класом SurfaceView / TextureView.
+     */
+    private fun videoBox(screen: Box): Box? {
+        if (locked()) return null
+        val root = rootInActiveWindow ?: return null
+        val pkg = root.packageName?.toString() ?: return null
+        if (pkg == packageName) return null
+        val found = VIDEO_IDS.flatMap { root.findAccessibilityNodeInfosByViewId("$pkg:id/$it") }.toMutableList()
+        walk(root) { n -> n.className?.toString()?.let { if (it.endsWith("SurfaceView") || it.endsWith("TextureView")) found += n } }
+        val r = android.graphics.Rect()
+        return found.map { n ->
+            n.getBoundsInScreen(r)
+            Box(maxOf(r.left, 0), maxOf(r.top, 0), minOf(r.right, screen.right), minOf(r.bottom, screen.bottom))
+        }.filter { it.width > 0 && it.height > 0 && it.area >= screen.area / 10 }.maxByOrNull { it.area }
+    }
         val params = android.view.WindowManager.LayoutParams(
             (140 * density).toInt(), (90 * density).toInt(),
             android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -222,6 +281,7 @@ class SpeedyHands : AccessibilityService() {
                     val dx = e.rawX - downX
                     val dy = e.rawY - downY
                     if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 12 * density) moved = true
+        userY = params.y
                     if (moved) {
                         params.x = (startX - dx).toInt() // gravity END: x рахується від правого краю
                         params.y = (startY + dy).toInt()
@@ -234,6 +294,7 @@ class SpeedyHands : AccessibilityService() {
         }
         if (locked()) view.visibility = android.view.View.GONE // з'явиться після розблокування
         try {
+                        userY = params.y
             wm.addView(view, params)
             overlay = view
             overlayParams = params
@@ -246,6 +307,7 @@ class SpeedyHands : AccessibilityService() {
         val view = overlay ?: return
         overlay = null
         try {
+            handler.postDelayed(avoidVideo, PLACE_MS)
             (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).removeView(view)
         } catch (_: Exception) {}
     }
@@ -254,6 +316,7 @@ class SpeedyHands : AccessibilityService() {
     fun home() = performGlobalAction(GLOBAL_ACTION_HOME)
 
     private fun walk(node: AccessibilityNodeInfo, depth: Int = 0, visit: (AccessibilityNodeInfo) -> Unit) {
+        handler.removeCallbacks(avoidVideo)
         if (depth > 40) return
         visit(node)
         for (i in 0 until node.childCount) node.getChild(i)?.let { walk(it, depth + 1, visit) }
@@ -269,6 +332,11 @@ class SpeedyHands : AccessibilityService() {
                 .contains(context.packageName + "/")
     }
 }
+        /** Служба (знову) підключилась — показати міні-Спіді, якщо Спіді не на екрані. */
+        var onConnected: (() -> Unit)? = null
+        private const val PLACE_MS = 1_000L
+        /** Ідентифікатори вікна відео: NewPipe ("surfaceView"), ExoPlayer, VLC тощо. */
+        private val VIDEO_IDS = listOf("surfaceView", "surface_view", "texture_view", "video_view", "player_view", "exo_content_frame", "player_surface")
 
 /** Де Спіді нічого не натискає й не вводить: гроші, паролі, налаштування, встановлення програм. */
 object Safety {

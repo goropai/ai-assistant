@@ -135,6 +135,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         face = FaceView(this)
+        // Службу керування перезапустили, поки Спіді у фоні, — міні-копія повертається.
+        com.speedy.assistant.phone.SpeedyHands.onConnected = { if (!resumed && assistant != null) showMiniSpeedy() }
         face.setOnClickListener { assistant?.manualWake() }
         face.setOnLongClickListener { openSettings(); true }
         // Обличчя, а над ним — екран для уроку письма (видно лише під час уроку).
@@ -692,6 +694,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        com.speedy.assistant.phone.SpeedyHands.onConnected = null
 
     private companion object {
         const val DEBUG_HEAR = "com.speedy.assistant.debug.HEAR"
