@@ -12,6 +12,10 @@ class CommandsTest {
         assertEquals("перевір оновлення", WakeWord.extractCommand(listOf("Спіді, перевір оновлення")))
         assertEquals("що ти бачиш", WakeWord.extractCommand(listOf("спиди що ти бачиш")))
         assertEquals("", WakeWord.extractCommand(listOf("Спіді!")))
+        // Відомій команді — перевага, навіть якщо варіант не перший (лог: "спіди а новий" першим).
+        val variants = listOf("спіди а новий", "спідні а новий", "спідні оновись", "спіди оновись")
+        assertEquals("а новий", WakeWord.extractCommand(variants))
+        assertEquals("оновись", WakeWord.extractCommand(variants, known = { LocalCommands.match(it) != null }))
         assertEquals("онови застосунок", WakeWord.extractCommand(listOf("привіт", "Гей, Спіді, онови застосунок")))
         assertNull(WakeWord.extractCommand(listOf("спідометр показує сто")))
         // Будь-де у фразі — звертання (і без коми).

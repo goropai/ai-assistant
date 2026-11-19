@@ -31,20 +31,26 @@ object WakeWord {
     /**
      * @return null — звертання немає; "" — назвали тільки ім'я; інакше текст команди.
      */
-    fun extractCommand(candidates: List<String>): String? {
-        for (candidate in candidates) {
-            val text = candidate.trim()
-            // Офлайн-модель не знає слова "спіді" і пише "спід і …" — сполучник прибираємо.
-            pattern.find(text)?.let { return text.substring(it.range.last + 1).trim().replace(LEADING_AND, "") }
-            trailing.find(text)?.let { return text.substring(0, it.range.first).trim() }
-            // Ім'я посередині — звертання; команда — фраза без нього.
-            middle.find(text)?.let { m ->
-                return text.removeRange(m.range).replace(Regex("\\s*,\\s*(?=[,.!?]|$)"), "")
-                    .replace(Regex("\\s{2,}"), " ").replace(Regex("^[\\s,.!?]+|[\\s,]+$"), "")
-            }
-        }
+    fun extractCommand(candidates: List<String>, known: (String) -> Boolean = { false }): String? {
+        // Варіанти з іменем; перевага — тому, де відома команда: "спіді а новий" був першим, а "спіді оновись" —
+        // четвертим (і модель отримувала "а новий").
+        val named = candidates.mapNotNull { named(it.trim()) }
+        if (named.isNotEmpty()) return named.firstOrNull { it.isNotEmpty() && known(it) } ?: named.first()
         // Дитяча вимова: Google пише "Сенді", "спидин", "співдін" — нечітко, лише на початку фрази.
         for (candidate in candidates) fuzzy(candidate.trim())?.let { return it }
+        return null
+    }
+
+    /** Команда з одного варіанту, де є "Спіді"; null — імені немає. */
+    private fun named(text: String): String? {
+        // Офлайн-модель не знає слова "спіді" і пише "спід і …" — сполучник прибираємо.
+        pattern.find(text)?.let { return text.substring(it.range.last + 1).trim().replace(LEADING_AND, "") }
+        trailing.find(text)?.let { return text.substring(0, it.range.first).trim() }
+        // Ім'я посередині — звертання; команда — фраза без нього.
+        middle.find(text)?.let { m ->
+            return text.removeRange(m.range).replace(Regex("\\s*,\\s*(?=[,.!?]|$)"), "")
+                .replace(Regex("\\s{2,}"), " ").replace(Regex("^[\\s,.!?]+|[\\s,]+$"), "")
+        }
         return null
     }
 

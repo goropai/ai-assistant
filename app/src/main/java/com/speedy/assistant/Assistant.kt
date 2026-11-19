@@ -774,9 +774,10 @@ class Assistant(
             awaitingBook = false
             inConversation = false
         }
-        val named = WakeWord.extractCommand(candidates)
+        val named = WakeWord.extractCommand(candidates, known = { LocalCommands.match(it) != null })
         val command = named
-            ?: candidates.firstOrNull()?.takeIf { inWindow }
+            // Без імені в розмові — теж перевага варіанту, що є відомою командою ("оновись" серед інших).
+            ?: (candidates.firstOrNull { LocalCommands.match(it) != null } ?: candidates.firstOrNull())?.takeIf { inWindow }
             // Дзвонить будильник — "вимкни будильник" / "стоп" і без "Спіді".
             ?: candidates.firstOrNull()?.takeIf { ears.ringing && LocalCommands.match(it) in ALARM_COMMANDS }
             ?: return
@@ -2630,7 +2631,10 @@ class Assistant(
     private suspend fun announceUpdate(info: UpdateInfo) {
         face.setMood(Mood.SURPRISED)
         val notes = info.notes.takeIf { it.isNotBlank() }?.let { " Що нового: $it." }.orEmpty()
-        say("Є нова версія ${info.versionName}!$notes Скажи «Спіді, оновись», і я встановлю її.")
+        say("Є нова версія ${info.versionName}!$notes Скажи «оновись», і я встановлю її.")
+        // Чекаємо відповіді: "оновись" і без "Спіді" (раніше таке ігнорувала).
+        inConversation = true
+        awaitingCommandUntil = SystemClock.uptimeMillis() + CONVERSATION_WINDOW_MS
     }
 
     private suspend fun speak(reply: AgentReply) {
