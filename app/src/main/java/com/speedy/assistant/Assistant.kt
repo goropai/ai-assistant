@@ -1647,7 +1647,7 @@ class Assistant(
                 if (unread.isEmpty()) {
                     say("Нового нічого.")
                 } else {
-                    say("${notesCount(unread.size)}: ${whoFrom(unread)}. Прочитати?")
+                    say(com.speedy.assistant.phone.NoteText.announce(unread, ::notesCount).removeSuffix(".") + ". Прочитати?")
                     com.speedy.assistant.phone.NotificationStore.notes.markRead(unread.map { it.key })
                 }
             }
@@ -2353,17 +2353,8 @@ class Assistant(
         com.speedy.assistant.phone.NotificationStore.notes.markRead(fresh.map { it.key })
         runBusy {
             chirps.play(Chirp.ATTENTION)
-            say(
-                if (fresh.size == 1) "Нове повідомлення у ${whoFrom(fresh)}."
-                else "${notesCount(fresh.size)}: ${whoFrom(fresh)}."
-            )
+            say(com.speedy.assistant.phone.NoteText.announce(fresh, ::notesCount))
         }
-    }
-
-    /** "Viber від мами, Telegram від Кості" (до 4, решта — "і ще N"). */
-    private fun whoFrom(notes: List<com.speedy.assistant.phone.Note>): String {
-        val parts = notes.take(4).map { n -> n.app + (n.title.takeIf { it.isNotBlank() }?.let { " від $it" } ?: "") }
-        return parts.joinToString(", ") + if (notes.size > 4) " і ще ${notes.size - 4}" else ""
     }
 
     private fun notesCount(n: Int) = "У тебе $n ${com.speedy.assistant.english.EnglishLesson.plural(n, "нове повідомлення", "нові повідомлення", "нових повідомлень")}"

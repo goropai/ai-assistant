@@ -15,7 +15,45 @@ data class Note(
     val text: String,
     val at: Long,
     val read: Boolean = false,
+    /** Від людини (месенджер, SMS, пошта): заголовок — відправник. Інакше заголовок — сам зміст ("Зараз: 18° · Ужгород"). */
+    val fromPerson: Boolean = true,
 )
+
+/** Як сказати про нові сповіщення вголос (без тексту повідомлень від людей). */
+object NoteText {
+    /** "Viber від мами" / "Google: зараз 18°, Ужгород". */
+    fun part(n: Note, single: Boolean): String {
+        val title = n.title.trim()
+        if (title.isBlank()) return n.app
+        if (n.fromPerson) return "${n.app} від $title"
+        return (if (single) "від ${n.app}: " else "${n.app} — ") + spoken(title)
+    }
+
+    fun announce(notes: List<Note>, count: (Int) -> String): String {
+        val one = notes.singleOrNull()
+        if (one != null) return "Нове повідомлення " + part(one, single = true).let { if (one.fromPerson) "у $it" else it } + "."
+        return "${count(notes.size)}: " + notes.take(4).joinToString(", ") { part(it, single = false) } +
+            (if (notes.size > 4) " і ще ${notes.size - 4}" else "") + "."
+    }
+
+    /** Заголовок-зміст природно: "Зараз: 18° · Ужгород" → "зараз 18°, Ужгород". */
+    fun spoken(title: String): String = title
+        .replace(Regex("\\s*[·•|]\\s*"), ", ")
+        .replace(Regex(":\\s*(?=[-+−]?\\d)"), " ")
+        .trim().trimEnd('.')
+        .replaceFirstChar { it.lowercase() }
+
+    /** Месенджери, SMS, пошта — там заголовок сповіщення — це хто написав. */
+    fun fromPerson(category: String?, pkg: String, hasMessages: Boolean): Boolean =
+        hasMessages || category == android.app.Notification.CATEGORY_MESSAGE || category == android.app.Notification.CATEGORY_EMAIL ||
+            category == android.app.Notification.CATEGORY_CALL || pkg in MESSENGERS
+
+    private val MESSENGERS = setOf(
+        "com.viber.voip", "org.telegram.messenger", "org.telegram.plus", "com.whatsapp", "com.facebook.orca",
+        "org.thoughtcrime.securesms", "com.skype.raider", "com.google.android.apps.messaging", "com.samsung.android.messaging",
+        "com.android.mms", "com.google.android.gm", "com.samsung.android.email.provider",
+    )
+}
 
 /**
  * Сповіщення інших застосунків (доступ вмикає людина: "Доступ до сповіщень").
@@ -72,7 +110,8 @@ class SpeedyNotifications : NotificationListenerService() {
         } catch (e: Exception) {
             sbn.packageName
         }
-        return Note(sbn.key, app, title.take(80), text.take(300), sbn.postTime)
+        val person = NoteText.fromPerson(n.category, sbn.packageName, extras.containsKey(Notification.EXTRA_MESSAGES))
+        return Note(sbn.key, app, title.take(80), text.take(300), sbn.postTime, fromPerson = person)
     }
 }
 
