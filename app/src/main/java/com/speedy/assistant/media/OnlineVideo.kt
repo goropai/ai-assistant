@@ -62,7 +62,33 @@ class OnlineVideo(private val context: Context) {
     companion object {
         private const val TAG = "OnlineVideo"
         const val YOUTUBE = "com.google.android.youtube"
-        private val NEWPIPES = listOf("org.schabi.newpipe", "org.polymorphicshade.tubular", "org.polymorphicshade.newpipe")
+        val NEWPIPES = listOf("org.schabi.newpipe", "org.polymorphicshade.tubular", "org.polymorphicshade.newpipe")
         private const val NEWPIPE_RETRY_MS = 2_500L
+    }
+}
+
+/** Голосом про відео з інтернету: "увімкни друге відео" (у списку NewPipe), "закрий відео" / "закрий NewPipe". */
+object OnlineVideoCommands {
+    sealed interface Command {
+        /** [index] — з нуля: "перше" → 0. */
+        data class Pick(val index: Int) : Command
+        data object Close : Command
+    }
+
+    private val ordinals = listOf("перш", "друг", "трет", "четверт", "п'ят")
+    private val pick = Regex(
+        "^(?:увімкни|ввімкни|включи|відкрий|постав|запусти|грай|давай)\\s+(перш\\p{L}*|друг\\p{L}*|трет\\p{L}*|четверт\\p{L}*|п'ят\\p{L}*)\\s+" +
+            "(?:відео|відос\\p{L}*|ролик\\p{L}*|кліп\\p{L}*|піс\\p{L}*)(?:\\s.*)?$",
+    )
+    private val close = Regex(
+        "^(?:закрий|вимкни|зупини|прибери|вийди\\s+з)\\s+(?:це\\s+)?(?:відео|ютуб\\p{L}*|youtube|new\\s*pipe|нью\\s*пайп\\p{L}*|пайп\\p{L}*|tubular|плеєр\\p{L}*)$",
+    )
+
+    fun parse(phrase: String): Command? {
+        val t = phrase.lowercase().replace('ʼ', '\'').replace('’', '\'').replace(Regex("[,!?.]"), " ").replace(Regex("\\s+"), " ").trim()
+            .replace(Regex("^спіді\\s+"), "")
+        if (close.matches(t)) return Command.Close
+        val m = pick.find(t) ?: return null
+        return Command.Pick(ordinals.indexOfFirst { m.groupValues[1].startsWith(it) })
     }
 }

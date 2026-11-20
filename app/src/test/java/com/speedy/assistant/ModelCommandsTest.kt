@@ -37,6 +37,7 @@ class ModelCommandsTest {
             else -> return true
         }
         if (TranslateCommands.parse(command) != null) return true
+        if (com.speedy.assistant.media.OnlineVideoCommands.parse(command) != null) return true
         if (MediaCommands.parse(command) != null) return true
         if (BookCommands.parse(command) != null) return true
         return when (PhoneCommands.parse(command)) {
@@ -66,6 +67,7 @@ class ModelCommandsTest {
             "урок української мови", "урок історії", "урок математики для Ліни",
             "огляд новин", "скасуй нагадування", "яке повітря", "де ти", "вартуй",
             "де мої окуляри", "що змінилось у кімнаті",
+            "увімкни перше відео", "увімкни друге відео", "увімкни третє відео", "закрий відео",
         ).forEach { assertTrue("модель скаже «$it», а Спіді не зрозуміє", understood(it)) }
     }
 

@@ -72,6 +72,8 @@ class Assistant(
     private val inForeground: () -> Boolean = { true },
     /** Повернути Спіді на екран. */
     private val bringToFront: () -> Unit = {},
+    /** Зупинити відео в іншому застосунку й повернути Спіді на екран; false — відео ніде не було. */
+    private val closeOtherVideo: () -> Boolean = { false },
     /** Відкрити налаштування доступу: "notes" — сповіщення, "hands" — спеціальні можливості. */
     private val openAccessSettings: (String) -> Unit = {},
     /** Денний ліміт розмов дитини і скільки хвилин дозволено (0 — без обмеження). */
@@ -1141,6 +1143,12 @@ class Assistant(
         // Переклад фраз і книг — без моделі (офлайн).
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return }
         // Фільми й аудіокниги у VLC — без моделі ("увімкни Дюну" без такого файлу — далі).
+        // "Увімкни друге відео" (у списку NewPipe), "закрий відео" — до VLC: там "перше відео" — це назва.
+        com.speedy.assistant.media.OnlineVideoCommands.parse(command)?.let { c ->
+            if (handleOnlineVideo(c)) return
+            // Закривати нічого — так і кажемо (модель повернула б ту саму команду).
+            if (c is com.speedy.assistant.media.OnlineVideoCommands.Command.Close) return say("Відео зараз ніде не грає.")
+        }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return }
         // Книги вголос — без моделі ("почитай Кобзаря" без такої книги — далі, до моделі).
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return }
@@ -1304,6 +1312,10 @@ class Assistant(
             }
         }
         com.speedy.assistant.translate.TranslateCommands.parse(command)?.let { if (handleTranslate(it)) return true }
+        com.speedy.assistant.media.OnlineVideoCommands.parse(command)?.let { c ->
+            if (!handleOnlineVideo(c)) say(if (c is com.speedy.assistant.media.OnlineVideoCommands.Command.Close) "Відео зараз ніде не грає." else "Список відео зараз не відкритий.")
+            return true
+        }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return true }
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return true }
         // Телефон: календар, будильник, таймер, дзвінок (лише номеронабирач — "Виклик" тисне людина).
@@ -1918,30 +1930,69 @@ class Assistant(
         say(if (opened == null) "Не маю чим відкрити відео з інтернету." else "Шукаю «$title» у ${opened.name}.")
         // NewPipe лише шукає — перше відео вмикаємо самі (якщо дозволено керувати застосунками).
         val pkg = opened?.newPipe ?: return
-        val hands = com.speedy.assistant.phone.SpeedyHands.instance ?: run { Log.i(TAG, "NewPipe: керування застосунками вимкнено — лишаю список"); return }
+        val hands = com.speedy.assistant.phone.SpeedyHands.instance ?: run {
+            Log.i(TAG, "NewPipe: керування застосунками вимкнено — лишаю список")
+            say("Натиснути відео сама не можу — вимкнено керування телефоном. Вибери в списку або скажи «Спіді, дозволь керувати телефоном».")
+            return
+        }
         playNewPipeResult(hands, pkg, title)
+    }
+
+    /** "Увімкни друге відео" / "закрий відео". false — не про це (NewPipe не відкритий, відео ніде немає). */
+    private suspend fun handleOnlineVideo(cmd: com.speedy.assistant.media.OnlineVideoCommands.Command): Boolean = when (cmd) {
+        com.speedy.assistant.media.OnlineVideoCommands.Command.Close -> {
+            val closed = closeOtherVideo()
+            Log.i(TAG, "закрити відео: ${if (closed) "зупинила й повернулась" else "відео ніде немає"}")
+            if (closed) say("Закрила.")
+            closed
+        }
+        is com.speedy.assistant.media.OnlineVideoCommands.Command.Pick -> {
+            val hands = com.speedy.assistant.phone.SpeedyHands.instance
+            val pkg = hands?.topPackage()?.takeIf { it in com.speedy.assistant.media.OnlineVideo.NEWPIPES }
+            when {
+                hands == null -> {
+                    say("Не можу натиснути — вимкнено керування телефоном. Скажи «Спіді, дозволь керувати телефоном».")
+                    true
+                }
+                pkg == null -> false
+                else -> {
+                    playNewPipeResult(hands, pkg, query = null, first = cmd.index, tries = 1)
+                    true
+                }
+            }
+        }
     }
 
     /**
      * NewPipe показав результати — натиснути перше відео (відкривається й грає саме). "Вміст недоступний"
      * (дитячі відео YouTube NewPipe часто не відтворює) — назад і наступне, до [NEWPIPE_TRIES].
      */
-    private suspend fun playNewPipeResult(hands: com.speedy.assistant.phone.SpeedyHands, pkg: String, query: String) {
-        val ready = kotlinx.coroutines.withTimeoutOrNull(NEWPIPE_RESULTS_MS) {
-            while (!hands.newPipeResults(pkg, query)) delay(500)
-            true
+    private suspend fun playNewPipeResult(
+        hands: com.speedy.assistant.phone.SpeedyHands, pkg: String, query: String?, first: Int = 0, tries: Int = NEWPIPE_TRIES,
+    ) {
+        // Щойно шукали — дочекатися результатів саме цього пошуку; "увімкни друге відео" — список уже є.
+        if (query != null) {
+            val ready = kotlinx.coroutines.withTimeoutOrNull(NEWPIPE_RESULTS_MS) {
+                while (!hands.newPipeResults(pkg, query)) delay(500)
+                true
+            }
+            if (ready == null) run { Log.i(TAG, "NewPipe: результатів пошуку не дочекалась"); return }
+            delay(500) // список домальовується
         }
-        if (ready == null) run { Log.i(TAG, "NewPipe: результатів пошуку не дочекалась"); return }
-        delay(500) // список домальовується
-        repeat(NEWPIPE_TRIES) { i ->
-            val video = hands.pickNewPipeResult(pkg, i) ?: run { Log.i(TAG, "NewPipe: більше відео в списку немає"); return }
+        repeat(tries) { n ->
+            val i = first + n
+            val video = hands.pickNewPipeResult(pkg, i) ?: run {
+                Log.i(TAG, "NewPipe: відео ${i + 1} у списку немає")
+                if (n == 0) say("Такого відео в списку не бачу.")
+                return
+            }
             // Відкривається кілька секунд: або грає, або панель помилки.
             val failed = kotlinx.coroutines.withTimeoutOrNull(NEWPIPE_OPEN_MS) {
                 while (!hands.newPipeError(pkg)) delay(700)
                 true
             } == true
             if (!failed) run { Log.i(TAG, "NewPipe: увімкнула «$video»"); return }
-            if (i == NEWPIPE_TRIES - 1 && hands.newPipeOpenInBrowser(pkg)) {
+            if (n == tries - 1 && hands.newPipeOpenInBrowser(pkg)) {
                 Log.i(TAG, "NewPipe: «$video» недоступне — відкриваю в браузері")
                 return say("У NewPipe ці відео не відкриваються, тож вмикаю в браузері.")
             }
@@ -1949,7 +2000,7 @@ class Assistant(
             hands.back()
             delay(1_500)
         }
-        say("Ці відео в NewPipe не відкриваються. Вибери інше в списку.")
+        say(if (tries == 1) "Це відео в NewPipe не відкривається." else "Ці відео в NewPipe не відкриваються. Вибери інше в списку.")
     }
 
     /** "Продовж дивитись" / "наступна серія": останнє того виду — з місця, де зупинились. */

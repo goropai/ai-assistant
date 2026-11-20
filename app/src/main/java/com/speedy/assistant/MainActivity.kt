@@ -191,9 +191,7 @@ class MainActivity : AppCompatActivity() {
             },
             soundsFactory = { worth, onSound -> com.speedy.assistant.guard.GuardSounds(this, worth, onSound) },
             onFriend = { name -> assistant?.guardFriend(name) },
-            bringToFront = {
-                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
-            },
+            bringToFront = ::returnToFront,
         )
 
         assistant = Assistant(
@@ -232,9 +230,8 @@ class MainActivity : AppCompatActivity() {
             reminders = reminders,
             english = englishCourse,
             inForeground = { resumed },
-            bringToFront = {
-                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
-            },
+            bringToFront = ::returnToFront,
+            closeOtherVideo = ::closeOtherVideo,
             openAccessSettings = { which ->
                 // Зміна PIN: поточний (перевірка всередині), потім новий двічі.
                 if (which == "pin") com.speedy.assistant.settings.PinDialog.change(this, settings)
@@ -610,12 +607,35 @@ class MainActivity : AppCompatActivity() {
         if (!videoIdle.update(android.os.SystemClock.uptimeMillis(), top, playing, hands.lastUserActionAt)) return
         android.util.Log.i("MainActivity", "відео в $top стоїть без реакції — повертаю Спіді на екран")
         sessions.forEach { try { it.transportControls.stop() } catch (_: Exception) {} }
-        // Samsung із фону startActivity переносить задачу, але знову відновлює той застосунок — тож задачу наперед.
+        returnToFront()
+    }
+
+    /** Повернути Спіді на екран. Samsung із фону startActivity переносить задачу, але відновлює той застосунок. */
+    private fun returnToFront() {
         try {
             (getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager).moveTaskToFront(taskId, 0)
         } catch (e: SecurityException) {
             startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK))
         }
+    }
+
+    /**
+     * "Закрий відео": зупинити відео в застосунку на екрані (без керування — в будь-якому, крім VLC-аудіо Спіді)
+     * і повернути Спіді. false — Спіді й так на екрані, а відео ніде немає.
+     */
+    private fun closeOtherVideo(): Boolean {
+        val top = com.speedy.assistant.phone.SpeedyHands.instance?.topPackage()
+        val sessions = try {
+            (getSystemService(MEDIA_SESSION_SERVICE) as android.media.session.MediaSessionManager)
+                .getActiveSessions(android.content.ComponentName(this, com.speedy.assistant.phone.SpeedyNotifications::class.java))
+                .filter { it.packageName != packageName && if (top != null && top != packageName) it.packageName == top else it.packageName != com.speedy.assistant.media.Vlc.PACKAGE }
+        } catch (e: SecurityException) {
+            emptyList()
+        }
+        if (resumed && sessions.isEmpty()) return false
+        sessions.forEach { try { it.transportControls.stop() } catch (_: Exception) {} }
+        returnToFront()
+        return true
     }
 
     /** Спіді не на екрані, але керує застосунками — її міні-копія в кутку. */
