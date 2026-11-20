@@ -1158,7 +1158,8 @@ class Assistant(
         com.speedy.assistant.phone.HandsCommands.parse(command, otherAppOpen = !inForeground())?.let { return handleHands(it) }
         // Дії на телефоні — без моделі; якщо не вийшло (нема такого застосунку) — далі до моделі.
         com.speedy.assistant.phone.PhoneCommands.parse(command)?.let { if (handlePhone(it)) return }
-        com.speedy.assistant.weather.Currency.parse(command)?.let { code -> if (tellRate(code)) return }
+        // "Як змінювався курс євро за місяць?" — історія з НБУ, не сьогоднішній курс.
+        com.speedy.assistant.weather.Currency.query(command)?.let { q -> if (if (q.days == null) tellRate(q.code) else tellTrend(q.code, q.days)) return }
 
         askModel(command)
     }
@@ -2470,6 +2471,25 @@ class Assistant(
     }
 
     /** Курс НБУ без моделі. false — не вдалось (хай відповідає модель із пошуком). */
+    /** Як змінювався курс за [days] днів (НБУ); false — не вдалось (тоді — модель з пошуком). */
+    private suspend fun tellTrend(code: String, days: Int): Boolean {
+        val c = currency ?: return false
+        val points = try {
+            c.history(code, days)
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "НБУ історія: ${e.message}")
+            return false
+        } catch (e: org.json.JSONException) {
+            Log.w(TAG, "НБУ історія: ${e.message}")
+            return false
+        }
+        val text = com.speedy.assistant.weather.Currency.trend(code, days, points) ?: return false
+        Log.i(TAG, "курс $code за $days дн.: ${points.size} днів")
+        face.setMood(Mood.HAPPY)
+        say(text)
+        return true
+    }
+
     private suspend fun tellRate(code: String): Boolean {
         val c = currency ?: return false
         val (rate, date) = try {
