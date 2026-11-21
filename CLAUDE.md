@@ -52,6 +52,11 @@ Kotlin, minSdk 25, targetSdk 34, лише armeabi-v7a. Основний прис
   змінилась, завмерла, нікого в кадрі; ≤ 4/год, ≥ 15 хв) → фото спереду → `ConfiguredLlm.generateJson(…, image,
   paidOnly = thingsPaidOnly)` → `ThingMemory` (`files/things.json`, 30 днів). "Де мої …" — `ThingCommands` до
   FORGET_THAT; не пам'ятає — далі до моделі. Зникла річ — лише після 2 оглядів без неї (модель пропускає).
+- **Розумний дім** (`home/`): Tuya Cloud OpenAPI (`TuyaCloud`, підпис HMAC-SHA256 у `TuyaSign`), пристрої —
+  `/v1.0/iot-01/associated-users/devices` (прив'язаний застосунок Smart Life). `HomeCommands` розбирає лише
+  відомі пристрої (за словами з назви й видом) — у `handle` до погоди й медіа. Модель: замки, ворота,
+  сигналізація, обігрівачі (`HomeKind.dangerous`) — лише після PIN (`confirmWithPinTimed`, 20 с, у `runHome`).
+  Вмикається в налаштуваннях.
 - **Камера**: `PresenceWatcher` (передня, ML-детектор + обличчя) працює, лише коли Спіді вільна
   (`updatePresence` у MainActivity; під час уроків — теж); `CameraSnapshot` бере камеру для фото моделі;
   сторож (`guard/GuardCamera`) — свою прив'язку, тоді PresenceWatcher вимкнено.

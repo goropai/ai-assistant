@@ -102,6 +102,8 @@ class Assistant(
     private val buzzer: com.speedy.assistant.voice.Buzzer? = null,
     /** Показати віконце PIN; після правильного — [onOk]. */
     private val confirmWithPin: (onOk: () -> Unit) -> Unit = {},
+    /** Віконце PIN, що саме закривається за [timeoutMs] (тоді — нічого): що підтверджують — у [message]. */
+    private val confirmWithPinTimed: (message: String, timeoutMs: Long, onOk: () -> Unit) -> Unit = { _, _, _ -> },
     /** Налаштування змінилися — оновити камеру, "мозок" тощо. */
     private val onSettingsChanged: () -> Unit = {},
     private val nightLog: com.speedy.assistant.night.NightLog? = null,
@@ -122,6 +124,8 @@ class Assistant(
     private val personInFront: () -> Boolean = { false },
     /** Чи є людина на знімку (задня камера); null — не розібрати. */
     private val personInPhoto: suspend (ByteArray) -> Boolean? = { null },
+    /** Розумний дім (Tuya Cloud): світло, розетки, датчики, клімат. */
+    private val home: com.speedy.assistant.home.SmartHome? = null,
     /** Пам'ять "що де лежить" (огляди кімнати моделлю). */
     private val things: com.speedy.assistant.things.ThingMemory? = null,
     /** JSON від моделі за фото (огляд кімнати) — з урахуванням "лише ключ з оплатою"; null — не вдалось. */
@@ -154,6 +158,8 @@ class Assistant(
     private var lastTalkAt = Long.MIN_VALUE / 2
     /** Пауза в розмові: перевірка, чи співрозмовник ще тут (див. PauseCheck). */
     private var pauseJob: Job? = null
+    /** Перепитала "яке саме?" про пристрій: що зробити, з чого вибирати, до коли чекати відповіді. */
+    private var homeWhich: Triple<com.speedy.assistant.home.HomeCommands.Command, List<com.speedy.assistant.home.HomeDevice>, Long>? = null
     /** Коли оглядати кімнату для пам'яті речей. */
     private val sceneChange = com.speedy.assistant.things.SceneChange()
     private var scanningThings = false
@@ -935,6 +941,8 @@ class Assistant(
         // "Де мої окуляри?" — з пам'яті речей; "забудь, що де лежить" — до FORGET_THAT (той узяв би це за спогад).
         // Не пам'ятає такої речі — далі (інші розбори, модель може подивитися камерою).
         com.speedy.assistant.things.ThingCommands.parse(command)?.let { if (handleThings(it)) return }
+        // Розумний дім — до погоди ("яка температура в спальні") і медіа ("увімкни <назва>"): лише відомі пристрої.
+        if (handleHomePhrase(command)) return
         // "Забудь, що я люблю drum and bass" — модель уміє лише додавати спогади, прибирає людина.
         FORGET_THAT.find(command.lowercase().trim())?.let { return forgetThat(it.groupValues[1]) }
         val cmd = LocalCommands.match(command)
@@ -1303,6 +1311,8 @@ class Assistant(
         if (com.speedy.assistant.guard.GuardCommands.parse(command) == true) { armGuard(); return true }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { schoolLesson(it, command); return true }
         if (com.speedy.assistant.news.News.isRequest(command)) { newsDigest(); return true }
+        // Розумний дім: замків, воріт, сигналізації й обігрівачів модель не чіпає (перевірка в runHome).
+        if (handleHomePhrase(command, fromModel = true)) return true
         // Пам'ять речей: питати можна, стирати — лише людина.
         when (val thing = com.speedy.assistant.things.ThingCommands.parse(command)) {
             null -> {}
@@ -2846,6 +2856,90 @@ class Assistant(
         runAgent(reply)
     }
 
+    /** Фраза про розумний дім; false — не про це (чи не налаштовано), хай розбирають інші. */
+    private suspend fun handleHomePhrase(command: String, fromModel: Boolean = false): Boolean {
+        val h = home?.takeIf { it.configured } ?: return false
+        // Перепитала "яке саме?" — відповідь "на кухні" чи "усі".
+        homeWhich?.let { (cmd, candidates, until) ->
+            homeWhich = null
+            if (SystemClock.uptimeMillis() < until) {
+                com.speedy.assistant.home.HomeCommands.choose(command, candidates)?.let { return runHome(com.speedy.assistant.home.HomeCommands.retarget(cmd, it), fromModel) }
+            }
+        }
+        if (!com.speedy.assistant.home.HomeCommands.mayBe(command)) return false
+        val cmd = com.speedy.assistant.home.HomeCommands.parse(command, h.devices()) ?: return false
+        return runHome(cmd, fromModel)
+    }
+
+    private suspend fun runHome(cmd: com.speedy.assistant.home.HomeCommands.Command, fromModel: Boolean): Boolean {
+        val h = home ?: return false
+        val now = SystemClock.uptimeMillis()
+        when (cmd) {
+            is com.speedy.assistant.home.HomeCommands.Command.Which -> {
+                homeWhich = Triple(cmd.then, cmd.candidates, now + HOME_WHICH_MS)
+                inConversation = true
+                awaitingCommandUntil = maxOf(awaitingCommandUntil, now + HOME_WHICH_MS)
+                say("Яке саме: ${cmd.candidates.take(5).joinToString(", ") { it.name }}?")
+            }
+            com.speedy.assistant.home.HomeCommands.Command.Overview -> {
+                val list = h.devices(maxAgeMs = 0)
+                say(if (list.isEmpty()) "Пристроїв розумного дому не бачу." else list.take(8).joinToString(". ") { com.speedy.assistant.home.HomeText.state(it) } + ".")
+            }
+            is com.speedy.assistant.home.HomeCommands.Command.Query -> {
+                val fresh = h.refresh(cmd.targets.take(6))
+                val lines = fresh.map { com.speedy.assistant.home.HomeText.state(it, h.scales(it)) }
+                say(lines.joinToString(". ") + ".")
+            }
+            else -> {
+                val targets = when (cmd) {
+                    is com.speedy.assistant.home.HomeCommands.Command.Power -> cmd.targets
+                    is com.speedy.assistant.home.HomeCommands.Command.Brightness -> cmd.targets
+                    is com.speedy.assistant.home.HomeCommands.Command.Cover -> cmd.targets
+                    else -> emptyList()
+                }
+                val risky = targets.filter { it.dangerous }
+                if (fromModel && risky.isNotEmpty()) {
+                    // Замки, ворота, сигналізація, обігрівачі за проханням моделі — лише з PIN батьків (20 с на відповідь).
+                    val what = when (cmd) {
+                        is com.speedy.assistant.home.HomeCommands.Command.Power -> if (cmd.on) "увімкнути" else "вимкнути"
+                        is com.speedy.assistant.home.HomeCommands.Command.Brightness -> "змінити яскравість"
+                        is com.speedy.assistant.home.HomeCommands.Command.Cover -> if (cmd.open) "відкрити" else "закрити"
+                        else -> "керувати"
+                    }
+                    val names = risky.joinToString(", ") { it.name }
+                    Log.i(TAG, "модель хоче $what: $names — питаю PIN")
+                    say("$names — лише з PIN батьків. Введи або скажи PIN.")
+                    confirmWithPinTimed("Спіді хоче $what: $names", HOME_PIN_MS) {
+                        Log.i(TAG, "PIN підтверджено: $what $names")
+                        runBusy { runHome(cmd, fromModel = false) }
+                    }
+                    return true
+                }
+                val results = targets.map { d ->
+                    d to when (cmd) {
+                        is com.speedy.assistant.home.HomeCommands.Command.Power -> h.power(d, cmd.on)
+                        is com.speedy.assistant.home.HomeCommands.Command.Brightness -> h.brightness(d, cmd.percent)
+                        is com.speedy.assistant.home.HomeCommands.Command.Cover -> h.cover(d, cmd.open)
+                        else -> null
+                    }
+                }
+                val done = results.filter { it.second == null }.map { it.first.name }
+                val verb = when (cmd) {
+                    is com.speedy.assistant.home.HomeCommands.Command.Power -> if (cmd.on) "Увімкнула" else "Вимкнула"
+                    is com.speedy.assistant.home.HomeCommands.Command.Brightness -> "Яскравість ${cmd.percent} відсотків"
+                    is com.speedy.assistant.home.HomeCommands.Command.Cover -> if (cmd.open) "Відкриваю" else "Закриваю"
+                    else -> ""
+                }
+                face.setMood(if (done.isNotEmpty()) Mood.HAPPY else Mood.SAD)
+                say(buildString {
+                    if (done.isNotEmpty()) append("$verb: ${done.joinToString(", ")}.")
+                    results.filter { it.second != null }.forEach { (d, why) -> append(" ${d.name}: $why.") }
+                }.trim())
+            }
+        }
+        return true
+    }
+
     /** Пам'ять речей голосом. false — такої речі не пам'ятає (хай далі вирішують інші розбори чи модель). */
     private suspend fun handleThings(cmd: com.speedy.assistant.things.ThingCommands.Command): Boolean {
         val memory = things ?: return false
@@ -2936,6 +3030,10 @@ class Assistant(
         const val SLEEP_AFTER_MS = 5 * 60_000L
         const val MAX_LOOKS = 3
         const val SETTLE_MS = 300L
+        /** Перепитала "яке саме?" — стільки чекати відповіді. */
+        const val HOME_WHICH_MS = 30_000L
+        /** Скільки віконце PIN чекає підтвердження небезпечної дії від моделі. */
+        const val HOME_PIN_MS = 20_000L
         /** "Що змінилось у кімнаті?" — за стільки часу. */
         const val THING_CHANGES_MS = 24 * 3600_000L
         /** NewPipe: скільки чекати результатів пошуку, відкриття відео і скільки відео пробувати. */

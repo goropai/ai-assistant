@@ -31,6 +31,7 @@ class ModelCommandsTest {
         if (GuardCommands.parse(command) == true) return true // лише ввімкнути
         if (SchoolCommands.parse(command) != null) return true
         if (News.isRequest(command)) return true
+        if (com.speedy.assistant.home.HomeCommands.parse(command, HomeTest.DEVICES) != null) return true
         when (com.speedy.assistant.things.ThingCommands.parse(command)) {
             null -> {}
             com.speedy.assistant.things.ThingCommands.Command.Forget -> return false
@@ -67,6 +68,7 @@ class ModelCommandsTest {
             "урок української мови", "урок історії", "урок математики для Ліни",
             "огляд новин", "скасуй нагадування", "яке повітря", "де ти", "вартуй",
             "де мої окуляри", "що змінилось у кімнаті",
+            "увімкни Лампа кухня", "вимкни Розетка чайник", "яскравість 30 відсотків Лампа кухня", "закрий Штори спальня", "що вдома",
             "увімкни перше відео", "увімкни друге відео", "увімкни третє відео", "закрий відео",
         ).forEach { assertTrue("модель скаже «$it», а Спіді не зрозуміє", understood(it)) }
     }

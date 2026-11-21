@@ -115,6 +115,15 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("things_paid_only", true)
         set(value) = prefs.edit().putBoolean("things_paid_only", value).apply()
 
+    // --- розумний дім (Tuya Cloud) ---
+    /** Підтримка Tuya: вимкнено — Спіді до хмари Tuya не звертається, навіть якщо ключі введено. */
+    var tuyaEnabled: Boolean
+        get() = prefs.getBoolean("tuya_enabled", false)
+        set(value) = prefs.edit().putBoolean("tuya_enabled", value).apply()
+    var tuyaRegion: String get() = str("tuya_region").ifEmpty { "eu" }; set(v) = put("tuya_region", v)
+    var tuyaId: String get() = str("tuya_id"); set(v) = put("tuya_id", v)
+    var tuyaSecret: String get() = str("tuya_secret"); set(v) = put("tuya_secret", v)
+
     /** Час від часу цікаві факти під інтереси знайомих. */
     var factsEnabled: Boolean
         get() = prefs.getBoolean("facts", true)

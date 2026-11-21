@@ -72,6 +72,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val llm by lazy { ConfiguredLlm(http, settings) }
+    private val smartHome by lazy {
+        com.speedy.assistant.home.SmartHome(
+            http,
+            credentials = { Triple(settings.tuyaRegion, settings.tuyaId, settings.tuyaSecret) },
+            enabled = { settings.tuyaEnabled },
+        )
+    }
     private val offlineEar by lazy { com.speedy.assistant.voice.OfflineEar(this) }
     /** Відбиток голосу (тембр) — модель мовця Vosk, після моделі офлайн-слуху. */
     private val voicePrints by lazy { com.speedy.assistant.voice.VoicePrints(this, offlineEar) }
@@ -211,6 +218,7 @@ class MainActivity : AppCompatActivity() {
                 child = { assistant?.childSpeaking() == true },
                 children = { profiles.names().filter { profiles.age(it) == com.speedy.assistant.people.Profiles.Age.CHILD } },
                 things = { if (settings.thingsEnabled) thingMemory.summary(8) else "" },
+                home = { if (smartHome.configured) smartHome.summary() else "" },
             ),
             camera = CameraSnapshot(this, this),
             robot = robot,
@@ -264,7 +272,16 @@ class MainActivity : AppCompatActivity() {
             voiceBook = com.speedy.assistant.voice.VoiceBook(db),
             settings = settings,
             buzzer = com.speedy.assistant.voice.Buzzer(this, settings),
-            confirmWithPin = { onOk -> runOnUiThread { com.speedy.assistant.settings.PinDialog.require(this, settings, onOk) } },
+            confirmWithPin = { onOk -> runOnUiThread { com.speedy.assistant.settings.PinDialog.require(this, settings, onOk = onOk) } },
+            confirmWithPinTimed = { message, timeoutMs, onOk ->
+                runOnUiThread {
+                    com.speedy.assistant.settings.PinDialog.require(
+                        this, settings, title = "PIN батьків", message = message, timeoutMs = timeoutMs,
+                        onTimeout = { android.util.Log.i("MainActivity", "PIN не ввели — дію скасовано: $message") },
+                        onOk = onOk,
+                    )
+                }
+            },
             onSettingsChanged = { runOnUiThread { updatePresence(); checkBrain() } },
             nightLog = nightLog,
             onNight = { on -> runOnUiThread { setNightMode(on) } },
@@ -281,6 +298,7 @@ class MainActivity : AppCompatActivity() {
             personInPhoto = { jpeg -> presence?.personIn(jpeg) },
             tracer = tracer,
             things = thingMemory,
+            home = smartHome,
             lookJson = { system, prompt, jpeg -> llm.generateJson(system, prompt, jpeg, paidOnly = settings.thingsPaidOnly) },
             generateJson = { system, prompt -> llm.generateJson(system, prompt) },
             school = com.speedy.assistant.school.SchoolProgress(java.io.File(filesDir, "school.json")),
@@ -298,6 +316,8 @@ class MainActivity : AppCompatActivity() {
         ).also {
             it.start()
             it.checkUpdatesOnLaunch()
+            // Пристрої розумного дому — заздалегідь (перша команда без очікування списку).
+            if (smartHome.configured) lifecycleScope.launch { smartHome.devices() }
         }
         // Тихо оновити адресу платформи: роутер міг видати їй нову IP.
         lifecycleScope.launch { robot.rediscover() }
@@ -418,7 +438,12 @@ class MainActivity : AppCompatActivity() {
                     }
                 },
             )
-            SettingsDialog.show(this, settings, family, guard) {
+            val home = SettingsDialog.Home { region, id, secret, done ->
+                lifecycleScope.launch { done(smartHome.check(region, id, secret)) }
+            }
+            SettingsDialog.show(this, settings, family, guard, home) {
+                smartHome.invalidate()
+                lifecycleScope.launch { smartHome.devices() }
                 face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
                 checkBrain()
                 updatePresence()

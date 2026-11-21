@@ -35,7 +35,10 @@ object SettingsDialog {
         val testAlert: (done: (String) -> Unit) -> Unit,
     )
 
-    fun show(context: Context, settings: AppSettings, family: Family? = null, guard: Guard? = null, onSaved: () -> Unit) {
+    /** Розумний дім: перевірити ключі Tuya (у фоні, відповідь — у [done]). */
+    class Home(val check: (region: String, id: String, secret: String, done: (String) -> Unit) -> Unit)
+
+    fun show(context: Context, settings: AppSettings, family: Family? = null, guard: Guard? = null, home: Home? = null, onSaved: () -> Unit) {
         val pad = (16 * context.resources.displayMetrics.density).toInt()
         val form = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -203,6 +206,41 @@ object SettingsDialog {
             tag = Runnable { refresh() }
         }
         form.addView(usage)
+        label("— Розумний дім (Tuya) —")
+        val tuyaOn = CheckBox(context).apply {
+            text = "Підтримка Tuya: керувати світлом, розетками, датчиками голосом"
+            isChecked = settings.tuyaEnabled
+        }
+        form.addView(tuyaOn)
+        form.addView(TextView(context).apply {
+            text = "iot.tuya.com → Cloud → проєкт (Smart Home) → Devices → Link App Account (QR у Smart Life). " +
+                "Access ID і Secret — на вкладці Overview проєкту. Дата-центр — той, що в проєкті."
+            textSize = 12f
+        })
+        val regions = com.speedy.assistant.home.TuyaRegion.entries.associateWith { r ->
+            RadioButton(context).apply { text = r.ua; id = View.generateViewId() }
+        }
+        val regionGroup = RadioGroup(context).apply {
+            regions.values.forEach { addView(it) }
+            check(regions.getValue(com.speedy.assistant.home.TuyaRegion.of(settings.tuyaRegion)).id)
+        }
+        form.addView(regionGroup)
+        label("Access ID (Client ID)")
+        val tuyaId = field(settings.tuyaId, "…")
+        label("Access Secret (Client Secret)")
+        val tuyaSecret = field(settings.tuyaSecret, "…", secret = true)
+        fun tuyaRegion() = regions.entries.first { it.value.id == regionGroup.checkedRadioButtonId }.key.code
+        if (home != null) form.addView(android.widget.Button(context).apply {
+            text = "Перевірити"
+            isAllCaps = false
+            setOnClickListener {
+                text = "Перевіряю…"
+                home.check(tuyaRegion(), tuyaId.text.toString(), tuyaSecret.text.toString()) { result ->
+                    text = "Перевірити"
+                    android.widget.Toast.makeText(context, result, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        })
         label("— Режим сторожа («Спіді, вартуй») —")
         form.addView(TextView(context).apply {
             text = "Тривогу надсилаю всіма заповненими каналами. Telegram: створи бота в @BotFather, встав токен, " +
@@ -304,6 +342,10 @@ object SettingsDialog {
                 settings.lessonOffers = offers.isChecked
                 settings.lessonWeights = com.speedy.assistant.school.LessonKind.save(weights)
                 saveGuard()
+                settings.tuyaEnabled = tuyaOn.isChecked
+                settings.tuyaRegion = tuyaRegion()
+                settings.tuyaId = tuyaId.text.toString()
+                settings.tuyaSecret = tuyaSecret.text.toString()
                 onSaved()
             }
             .setNegativeButton("Скасувати", null)

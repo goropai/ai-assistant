@@ -106,22 +106,49 @@ object PinDialog {
         dialog.show()
     }
 
-    /** Перевірка PIN перед захищеною дією; немає PIN — спершу задати. */
-    fun require(context: Context, settings: AppSettings, onOk: () -> Unit) {
+    /**
+     * Перевірка PIN перед захищеною дією; немає PIN — спершу задати. [timeoutMs] > 0 — віконце саме
+     * закривається (у заголовку — відлік), тоді [onTimeout]; [message] — що саме підтверджують.
+     */
+    fun require(
+        context: Context, settings: AppSettings,
+        title: String = "Введіть PIN", message: String? = null, timeoutMs: Long = 0, onTimeout: () -> Unit = {},
+        onOk: () -> Unit,
+    ) {
         if (!settings.hasPin) return setup(context, settings, onDone = onOk)
         val field = pinField(context, "PIN")
         val pad = (16 * context.resources.displayMetrics.density).toInt()
         val dialog = AlertDialog.Builder(context, androidx.appcompat.R.style.Theme_AppCompat_Dialog_Alert)
-            .setTitle("Введіть PIN")
+            .setTitle(title)
             .setView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(pad, pad / 2, pad, 0)
+                message?.let { addView(TextView(context).apply { text = it }) }
                 addView(field)
                 addView(voiceHint(context))
             })
             .setPositiveButton("OK", null)
             .setNegativeButton("Скасувати", null)
             .create()
+        if (timeoutMs > 0) {
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            val until = android.os.SystemClock.uptimeMillis() + timeoutMs
+            val tick = object : Runnable {
+                override fun run() {
+                    // Закрили (правильний PIN чи "Скасувати") — відлік зупиняється сам.
+                    if (!dialog.isShowing) return
+                    val left = (until - android.os.SystemClock.uptimeMillis() + 999) / 1000
+                    if (left <= 0) {
+                        dialog.dismiss()
+                        onTimeout()
+                        return
+                    }
+                    dialog.setTitle("$title ($left с)")
+                    handler.postDelayed(this, 1000)
+                }
+            }
+            handler.post(tick) // після show() — віконце вже відкрите
+        }
         dialog.setOnShowListener {
             val ok = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             ok.setOnClickListener {
