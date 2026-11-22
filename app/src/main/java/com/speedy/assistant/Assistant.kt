@@ -2886,6 +2886,8 @@ class Assistant(
                 say(if (list.isEmpty()) "Пристроїв розумного дому не бачу." else list.take(8).joinToString(". ") { com.speedy.assistant.home.HomeText.state(it) } + ".")
             }
             is com.speedy.assistant.home.HomeCommands.Command.Query -> {
+                // Датчик лише з Bluetooth: розмова з ним — кілька секунд, тож попередити.
+                if (cmd.targets.take(6).any { h.mayUseBluetooth(it) }) say("Хвилинку, питаю по Bluetooth.")
                 val fresh = h.refresh(cmd.targets.take(6))
                 val lines = fresh.map { com.speedy.assistant.home.HomeText.state(it, h.scales(it)) }
                 say(lines.joinToString(". ") + ".")

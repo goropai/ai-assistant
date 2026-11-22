@@ -190,29 +190,44 @@ object HomeText {
 
     private fun number(v: Double) = if (v % 1.0 == 0.0) v.toInt().toString() else String.format(uk, "%.1f", v)
 
+    /** "41 відсоток", "42 відсотки", "45 відсотків", дробове — "41,5 відсотка". */
+    private fun percent(v: Double) =
+        "${number(v)} " + if (v % 1.0 == 0.0) com.speedy.assistant.BatteryAlerts.percentWord(v.toInt()) else "відсотка"
+
     fun state(d: HomeDevice, scales: Map<String, Int> = emptyMap()): String {
-        if (!d.online) return "${d.name}: не в мережі"
+        if (!d.online) {
+            // Датчик на батарейці міг заснути чи сісти — останні показники все одно корисні.
+            val last = readings(d, scales)
+            return "${d.name}: не в мережі" + if (last.isEmpty()) "" else ", останні показники — ${last.joinToString(", ")}"
+        }
         val parts = mutableListOf<String>()
         d.isOn?.let { on ->
             parts += if (on) "увімкнено" else "вимкнено"
             if (on) d.brightCode?.let { code ->
                 val raw = (d.status[code] as? Number)?.toInt()
                 val max = if (code == "bright_value_v2") 1000 else 255
-                if (raw != null) parts += "яскравість ${(raw * 100 / max).coerceIn(1, 100)} відсотків"
+                if (raw != null) parts += "яскравість ${percent((raw * 100 / max).coerceIn(1, 100).toDouble())}"
             }
             (d.status["cur_power"] as? Number)?.toDouble()?.let { w -> if (on && w > 0) parts += "споживає ${number(w / 10)} ват" }
         }
-        HomeCommands.TEMP_CODES.firstOrNull { it in d.status }?.let { c -> value(c, d.status[c], scales)?.let { parts += "${number(it)} °C" } }
-        HomeCommands.HUMIDITY_CODES.firstOrNull { it in d.status }?.let { c -> value(c, d.status[c], scales)?.let { parts += "вологість ${number(it)} відсотків" } }
+        parts += readings(d, scales)
         (d.status["doorcontact_state"] as? Boolean)?.let { parts += if (it) "відчинено" else "зачинено" }
         (d.status["pir"] as? String)?.let { parts += if (it == "pir") "є рух" else "руху немає" }
         listOf("smoke_sensor_status", "gas_sensor_status", "watersensor_state").firstOrNull { it in d.status }?.let { c ->
             parts += if (d.status[c] == "alarm") "ТРИВОГА" else "усе гаразд"
         }
-        (d.status["percent_state"] as? Number)?.let { parts += "відкрито на ${it.toInt()} відсотків" }
-        (d.status["battery_percentage"] as? Number)?.toInt()?.let { if (it < 20) parts += "батарейка сідає ($it відсотків)" }
+        (d.status["percent_state"] as? Number)?.let { parts += "відкрито на ${percent(it.toDouble())}" }
+        (d.status["battery_percentage"] as? Number)?.toInt()?.let { if (it < 20) parts += "батарейка сідає (${percent(it.toDouble())})" }
         if (parts.isEmpty()) parts += "на зв'язку"
         return "${d.name}: ${parts.joinToString(", ")}"
+    }
+
+    /** Температура й вологість (якщо датчик їх має). */
+    private fun readings(d: HomeDevice, scales: Map<String, Int>): List<String> {
+        val out = mutableListOf<String>()
+        HomeCommands.TEMP_CODES.firstOrNull { it in d.status }?.let { c -> value(c, d.status[c], scales)?.let { out += "${number(it)} °C" } }
+        HomeCommands.HUMIDITY_CODES.firstOrNull { it in d.status }?.let { c -> value(c, d.status[c], scales)?.let { out += "вологість ${percent(it)}" } }
+        return out
     }
 
     /** Коротко для моделі: "Лампа кухня (світло, увімк.)". */

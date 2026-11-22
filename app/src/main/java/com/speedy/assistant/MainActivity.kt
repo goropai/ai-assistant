@@ -77,6 +77,7 @@ class MainActivity : AppCompatActivity() {
             http,
             credentials = { Triple(settings.tuyaRegion, settings.tuyaId, settings.tuyaSecret) },
             enabled = { settings.tuyaEnabled },
+            ble = com.speedy.assistant.home.TuyaBleClient(this),
         )
     }
     private val offlineEar by lazy { com.speedy.assistant.voice.OfflineEar(this) }

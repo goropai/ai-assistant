@@ -106,6 +106,13 @@ class HomeTest {
         assertEquals("Вікно кухня: відчинено", HomeText.state(DEVICES.first { it.name == "Вікно кухня" }))
         assertEquals("Обігрівач (обігрів, з PIN, вимк.)", HomeText.brief(DEVICES.first { it.name == "Обігрівач" }))
         assertEquals("Розетка: не в мережі", HomeText.state(HomeDevice("x", "Розетка", "cz", false, emptyMap())))
+        assertEquals("Малючок: не в мережі, останні показники — 21,5 °C, вологість 45 відсотків",
+            HomeText.state(HomeDevice("m", "Малючок", "wsdcg", false, mapOf("va_temperature" to 215, "va_humidity" to 45))))
+        // Відмінювання: 41 відсоток, 42 відсотки, 12 відсотків.
+        assertEquals("Малючок: 26,6 °C, вологість 41 відсоток, батарейка сідає (12 відсотків)",
+            HomeText.state(HomeDevice("m", "Малючок", "wsdcg", true, mapOf("temp_current" to 266, "humidity_value" to 41, "battery_percentage" to 12))))
+        assertEquals("Малючок: 26,6 °C, вологість 42 відсотки",
+            HomeText.state(HomeDevice("m", "Малючок", "wsdcg", true, mapOf("temp_current" to 266, "humidity_value" to 42))))
     }
 
     @Test

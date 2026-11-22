@@ -127,6 +127,30 @@ class TuyaCloud(
         return request("POST", "/v1.0/devices/$id/commands", body = body) == true
     }
 
+    /** Для Bluetooth: ключ і uuid пристрою, MAC — із заводських відомостей; null — немає (не BLE). */
+    suspend fun bleCredentials(id: String): BleCredentials? {
+        val info = request("GET", "/v1.0/devices/$id") as? JSONObject ?: return null
+        val key = info.optString("local_key").takeIf { it.length >= 6 } ?: return null
+        val factory = request("GET", "/v1.0/iot-03/devices/factory-infos", mapOf("device_ids" to id)) as? JSONArray
+        val f = factory?.optJSONObject(0)
+        val mac = f?.optString("mac")?.takeIf { it.isNotBlank() } ?: return null
+        val uuid = info.optString("uuid").ifBlank { f.optString("uuid") }.takeIf { it.isNotBlank() } ?: return null
+        return BleCredentials(mac, key, uuid, id)
+    }
+
+    /** Номер показника (dp id) → код ("1" → "va_temperature"): з моделі пристрою. */
+    suspend fun dpCodes(id: String): Map<Int, String> {
+        val result = request("GET", "/v2.0/cloud/thing/$id/model") as? JSONObject ?: return emptyMap()
+        val model = try { JSONObject(result.optString("model", "{}")) } catch (e: Exception) { return emptyMap() }
+        val out = HashMap<Int, String>()
+        val services = model.optJSONArray("services") ?: return out
+        for (i in 0 until services.length()) {
+            val props = services.getJSONObject(i).optJSONArray("properties") ?: continue
+            for (j in 0 until props.length()) props.getJSONObject(j).let { p -> out[p.optInt("abilityId")] = p.optString("code") }
+        }
+        return out
+    }
+
     /** Можливі значення кодів (діапазон яскравості, масштаб температури): код → {min, max, scale…}. */
     suspend fun specs(id: String): Map<String, JSONObject> {
         val result = request("GET", "/v1.0/devices/$id/specifications") as? JSONObject ?: return emptyMap()

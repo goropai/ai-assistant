@@ -14,7 +14,13 @@ class SmartHome(
     private val credentials: () -> Triple<String, String, String>,
     /** Підтримку Tuya ввімкнено в налаштуваннях. */
     private val enabled: () -> Boolean = { true },
+    /** Bluetooth: пристрої, що самі в хмару не виходять (датчики лише з BLE), Спіді читає напряму. */
+    private val ble: TuyaBleClient? = null,
 ) {
+    /** Bluetooth-відомості пристроїв (null — не BLE чи не вдалось), номери показників, невдалі спроби. */
+    private val bleCreds = HashMap<String, BleCredentials?>()
+    private val dpCodes = HashMap<String, Map<Int, String>>()
+    private val bleFailedAt = HashMap<String, Long>()
     private var cloud: TuyaCloud? = null
     private var cloudKey: Triple<String, String, String>? = null
     @Volatile var devices: List<HomeDevice> = emptyList()
@@ -83,14 +89,44 @@ class SmartHome(
         }
     }
 
-    /** Свіжий стан цих пристроїв (для "яка температура…"). */
+    /** Чи спробує цей пристрій по Bluetooth (у хмарі "не в мережі", Bluetooth є, нещодавно не відмовляв). */
+    fun mayUseBluetooth(d: HomeDevice): Boolean =
+        ble != null && !d.online && SystemClock.uptimeMillis() - (bleFailedAt[d.id] ?: Long.MIN_VALUE / 2) > BLE_RETRY_MS &&
+            bleCreds.getOrDefault(d.id, BleCredentials("", "", "", "")) != null
+
+    /** Свіжий стан цих пристроїв (для "яка температура…"): офлайн у хмарі — по Bluetooth напряму. */
     suspend fun refresh(targets: List<HomeDevice>): List<HomeDevice> {
         val c = cloud() ?: return targets
         val fresh = targets.map { d ->
+            if (mayUseBluetooth(d)) viaBluetooth(c, d)?.let { return@map it }
             try { d.copy(status = c.status(d.id)) } catch (e: java.io.IOException) { Log.w(TAG, "стан ${d.name}: ${e.message}"); d }
         }
         devices = devices.map { d -> fresh.firstOrNull { it.id == d.id } ?: d }
         return fresh
+    }
+
+    /** Показники напряму по Bluetooth (Спіді як шлюз); null — не вдалось. */
+    private suspend fun viaBluetooth(c: TuyaCloud, d: HomeDevice): HomeDevice? {
+        val client = ble ?: return null
+        val creds = if (bleCreds.containsKey(d.id)) bleCreds[d.id] else try {
+            c.bleCredentials(d.id).also { bleCreds[d.id] = it; Log.i(TAG, "${d.name}: Bluetooth ${it?.mac ?: "немає"}") }
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "${d.name}: відомості для Bluetooth — ${e.message}")
+            null
+        }
+        creds ?: return null
+        val dps = try { client.read(creds) } catch (e: Exception) { Log.w(TAG, "${d.name}: Bluetooth — ${e.message}"); null }
+        if (dps.isNullOrEmpty()) {
+            bleFailedAt[d.id] = SystemClock.uptimeMillis()
+            return null
+        }
+        val codes = dpCodes[d.id] ?: try { c.dpCodes(d.id).also { dpCodes[d.id] = it } } catch (e: java.io.IOException) { emptyMap() }
+        val status = dps.mapNotNull { (id, v) -> (codes[id] ?: DEFAULT_DPS[d.category]?.get(id))?.let { it to (v as Any?) } }.toMap()
+        Log.i(TAG, "${d.name} по Bluetooth: $status")
+        // У хмарі ті самі величини бувають під іншими кодами (va_temperature проти temp_current) — старі прибрати.
+        val groups = listOf(HomeCommands.TEMP_CODES, HomeCommands.HUMIDITY_CODES)
+        val kept = d.status.filterKeys { k -> groups.none { g -> k in g && status.keys.any { it in g } } }
+        return d.copy(online = true, status = kept + status)
     }
 
     /** Масштаби числових кодів (температура 215 → 21.5) — з опису пристрою, раз на запуск. */
@@ -153,5 +189,9 @@ class SmartHome(
         private const val TAG = "SmartHome"
         const val LIST_TTL_MS = 2 * 60_000L
         const val RETRY_MS = 5 * 60_000L
+        /** Bluetooth не відповів — стільки не пробувати знову (кожна спроба — до 20 с). */
+        const val BLE_RETRY_MS = 3 * 60_000L
+        /** Якщо модель пристрою недоступна: типові номери показників. */
+        private val DEFAULT_DPS = mapOf("wsdcg" to mapOf(1 to "va_temperature", 2 to "va_humidity", 4 to "battery_percentage"))
     }
 }

@@ -10,6 +10,9 @@
     <uses-permission android:name="android.permission.REORDER_TASKS" />
     <!-- Погода й "де ми": GPS і мережеве визначення місця -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Розумний дім: датчики Tuya лише з Bluetooth — Спіді читає їх сама (вмикає Bluetooth, коли треба). -->
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- "Який номер у Кості?", "що в мене сьогодні в календарі?", будильник і таймер -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
