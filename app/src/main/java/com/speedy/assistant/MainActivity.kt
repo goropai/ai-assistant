@@ -478,10 +478,10 @@ class MainActivity : AppCompatActivity() {
             val guard = SettingsDialog.Guard(
                 findTelegramChat = { token, done ->
                     lifecycleScope.launch {
-                        val id = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             com.speedy.assistant.guard.Alerts.findTelegramChat(http, token)
                         }
-                        done(id)
+                        done(found.id, found.problem)
                     }
                 },
                 testAlert = { done ->

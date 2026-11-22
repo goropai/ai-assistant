@@ -43,7 +43,8 @@ object SettingsDialog {
 
     /** Режим сторожа: пошук chat id Telegram-бота і пробна тривога (обидва — у фоні, відповідь — у [done]). */
     class Guard(
-        val findTelegramChat: (token: String, done: (String?) -> Unit) -> Unit,
+        /** [done]: знайдений chat id або (null і) що не так. */
+        val findTelegramChat: (token: String, done: (id: String?, problem: String?) -> Unit) -> Unit,
         val testAlert: (done: (String) -> Unit) -> Unit,
     )
 
@@ -476,13 +477,13 @@ private class SettingsScreens(
         f.section("Telegram")
         f.label("Токен бота")
         val tgToken = f.field(settings.guardTelegramToken, "123456:ABC…", secret = true)
-        f.label("Chat id")
+        f.label("Chat id — число (знайде кнопка нижче; ім'я бота сюди не пиши)")
         val tgChat = f.field(settings.guardTelegramChat, "напиши боту — і «Знайти»")
         f.button("Знайти chat id") { b ->
             b.text = "Шукаю…"
-            guard?.findTelegramChat?.invoke(tgToken.text.toString()) { found ->
+            guard?.findTelegramChat?.invoke(tgToken.text.toString()) { found, problem ->
                 b.text = "Знайти chat id"
-                if (found != null) tgChat.setText(found) else f.toast("Не знайшла: перевір токен і напиши боту ще раз")
+                if (found != null) { tgChat.setText(found); f.toast("Знайшла: $found") } else f.toast(problem ?: "Не знайшла")
             }
         }
         f.section("Пошта")

@@ -94,7 +94,8 @@ class Alerts(private val context: Context, http: OkHttpClient, private val setti
         fun attempt(what: String, block: () -> Unit) {
             result += try { block(); "$what — так" } catch (e: Exception) { "$what — ні (${e.message?.take(80)})" }
         }
-        if (telegram) attempt("Telegram") { telegramCall("sendMessage", mapOf("text" to text)) }
+        if (telegram && !validChat(settings.guardTelegramChat)) result += "Telegram — ні: chat id має бути числом (не ім'я бота) — натисни «Знайти chat id»"
+        else if (telegram) attempt("Telegram") { telegramCall("sendMessage", mapOf("text" to text)) }
         if (email) attempt("пошта") { sendEmail(Alert(text)) }
         if (sms) attempt("SMS") { SmsManager.getDefault().sendTextMessage(settings.guardSmsNumber, null, text, null, null) }
         if (settings.guardSmsNumber.isNotBlank() && !sms) result += "SMS — немає дозволу"
@@ -167,20 +168,40 @@ class Alerts(private val context: Context, http: OkHttpClient, private val setti
     companion object {
         private const val TAG = "Alerts"
 
+        /** Chat id — число (особистий чат, група з мінусом) чи @канал; ім'я бота сюди не підходить. */
+        fun validChat(chat: String) = Regex("-?\\d+|@\\w{4,}").matches(chat.trim())
+
+        /** Знайдений chat id або що не так (для людини). */
+        data class ChatLookup(val id: String?, val problem: String?)
+
         /**
-         * Chat id для бота: людина пише боту будь-що (/start), а ми беремо чат з останнього повідомлення.
-         * null — повідомлень немає або токен хибний.
+         * Chat id для бота: людина пише боту будь-що (/start), а ми беремо чат з останнього повідомлення
+         * (особисте, група, канал).
          */
-        fun findTelegramChat(http: OkHttpClient, token: String): String? = try {
+        fun findTelegramChat(http: OkHttpClient, token: String): ChatLookup = try {
             http.newCall(Request.Builder().url("https://api.telegram.org/bot${token.trim()}/getUpdates").build()).execute().use { r ->
-                if (!r.isSuccessful) return null
-                val results = JSONObject(r.body!!.string()).optJSONArray("result") ?: return null
-                (results.length() - 1 downTo 0).asSequence()
-                    .mapNotNull { results.getJSONObject(it).optJSONObject("message")?.optJSONObject("chat")?.optLong("id") }
-                    .firstOrNull()?.toString()
+                when (r.code) {
+                    200 -> {}
+                    401, 404 -> return ChatLookup(null, "Токен неправильний: скопіюй його з @BotFather ще раз (повністю, з двокрапкою).")
+                    409 -> return ChatLookup(null, "У бота ввімкнено webhook — тоді chat id так не знайти. Видали webhook або впиши chat id вручну.")
+                    else -> return ChatLookup(null, "Telegram відповів помилкою ${r.code}. Спробуй ще раз.")
+                }
+                chatFromUpdates(r.body!!.string())?.let { ChatLookup(it, null) }
+                    ?: ChatLookup(null, "Бот ще не отримав повідомлень. Відкрий свого бота в Telegram, натисни «Почати» (/start) і натисни «Знайти» ще раз.")
             }
         } catch (e: Exception) {
-            null
+            ChatLookup(null, "Немає зв'язку з Telegram: ${e.message?.take(80)}")
+        }
+
+        /** Чат з найсвіжішого оновлення getUpdates (повідомлення, допис у каналі, додавання бота в групу). */
+        fun chatFromUpdates(json: String): String? {
+            val results = JSONObject(json).optJSONArray("result") ?: return null
+            return (results.length() - 1 downTo 0).asSequence().mapNotNull { i ->
+                val u = results.getJSONObject(i)
+                listOf("message", "edited_message", "channel_post", "my_chat_member").firstNotNullOfOrNull { k ->
+                    u.optJSONObject(k)?.optJSONObject("chat")?.takeIf { it.has("id") }?.getLong("id")
+                }
+            }.firstOrNull()?.toString()
         }
     }
 }
