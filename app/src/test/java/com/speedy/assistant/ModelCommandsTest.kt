@@ -30,6 +30,7 @@ class ModelCommandsTest {
         if (NightCommands.parse(command) != null) return true
         if (GuardCommands.parse(command) == true) return true // лише ввімкнути
         if (SchoolCommands.parse(command) != null) return true
+        if (com.speedy.assistant.brushing.BrushCommands.parse(command) != null) return true
         if (News.isRequest(command)) return true
         if (com.speedy.assistant.home.HomeCommands.parse(command, HomeTest.DEVICES) != null) return true
         when (com.speedy.assistant.things.ThingCommands.parse(command)) {
@@ -70,7 +71,7 @@ class ModelCommandsTest {
             "огляд новин", "скасуй нагадування", "яке повітря", "де ти", "вартуй",
             "де мої окуляри", "що змінилось у кімнаті",
             "увімкни Лампа кухня", "вимкни Розетка чайник", "яскравість 30 відсотків Лампа кухня", "закрий Штори спальня", "що вдома",
-            "яка температура Датчик спальня", "яка температура вдома", "знайди казку Пан Коцький",
+            "яка температура Датчик спальня", "яка температура вдома", "знайди казку Пан Коцький", "я чищу зуби", "мої зірочки",
             "увімкни перше відео", "увімкни друге відео", "увімкни третє відео", "закрий відео",
         ).forEach { assertTrue("модель скаже «$it», а Спіді не зрозуміє", understood(it)) }
     }

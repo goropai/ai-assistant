@@ -141,6 +141,9 @@ class Assistant(
     private val lookJson: suspend (system: String, prompt: String, jpeg: ByteArray) -> String? = { _, _, _ -> null },
     /** Екран для уроку письма (обвести пальцем обрис); null — немає. */
     private val tracer: com.speedy.assistant.school.Tracer? = null,
+    /** Чищення зубів: екран із зубами й зірочки (files/brushing.json). */
+    private val brushScreen: com.speedy.assistant.brushing.BrushScreen? = null,
+    private val brushStars: com.speedy.assistant.brushing.BrushStars? = null,
     /** Запит до "мозку" за JSON (уроки, цікаві факти); null — не вдалось. */
     private val generateJson: suspend (system: String, prompt: String) -> String? = { _, _ -> null },
     /** Прогрес уроків математики, логіки тощо. */
@@ -947,6 +950,7 @@ class Assistant(
             null -> {}
         }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { return schoolLesson(it, command) }
+        com.speedy.assistant.brushing.BrushCommands.parse(command)?.let { return brushing(it, command) }
         // "Де мої окуляри?" — з пам'яті речей; "забудь, що де лежить" — до FORGET_THAT (той узяв би це за спогад).
         // Не пам'ятає такої речі — далі (інші розбори, модель може подивитися камерою).
         com.speedy.assistant.things.ThingCommands.parse(command)?.let { if (handleThings(it)) return }
@@ -1321,6 +1325,7 @@ class Assistant(
         // Сторож: модель може лише ввімкнути (вимкнути — знайоме обличчя чи PIN, тобто людина).
         if (com.speedy.assistant.guard.GuardCommands.parse(command) == true) { armGuard(); return true }
         com.speedy.assistant.school.SchoolCommands.parse(command)?.let { schoolLesson(it, command); return true }
+        com.speedy.assistant.brushing.BrushCommands.parse(command)?.let { brushing(it, command); return true }
         if (com.speedy.assistant.news.News.isRequest(command)) { newsDigest(); return true }
         // Розумний дім: замків, воріт, сигналізації й обігрівачів модель не чіпає (перевірка в runHome).
         if (handleHomePhrase(command, fromModel = true)) return true
@@ -1524,6 +1529,71 @@ class Assistant(
         if (!child) return null
         val speaker = people?.speaker(SystemClock.uptimeMillis(), ANSWER_FACE_MS) ?: return null
         return speaker.takeIf { it != learner && profiles?.age(it) == com.speedy.assistant.people.Profiles.Age.ADULT }
+    }
+
+    private suspend fun brushing(cmd: com.speedy.assistant.brushing.BrushCommands.Command, command: String) {
+        val stars = brushStars ?: return say("Я поки не вмію рахувати зірочки за зубки.")
+        val name = learnerFor(command)
+        when (cmd) {
+            com.speedy.assistant.brushing.BrushCommands.Command.Start -> brushTeeth(stars, name)
+            com.speedy.assistant.brushing.BrushCommands.Command.Stars -> {
+                val now = System.currentTimeMillis()
+                face.setMood(Mood.HAPPY)
+                say(com.speedy.assistant.brushing.BrushText.summary(stars.total(name), stars.streak(name, now), stars.today(name, now)))
+            }
+        }
+    }
+
+    /**
+     * Чищення зубів: дві хвилини по зонах (малюнок оновлюється сам, фрази — за секундами; запізніле
+     * підбадьорення пропускаємо, зміну зони — ні). ≥ 90 с (навіть якщо зупинили дотиком) — зірочка.
+     */
+    private suspend fun brushTeeth(stars: com.speedy.assistant.brushing.BrushStars, name: String) {
+        val plan = com.speedy.assistant.brushing.BrushPlan
+        Log.i(TAG, "чищення зубів: $name")
+        inConversation = false
+        face.setMood(Mood.HAPPY)
+        brushScreen?.show()
+        val started = SystemClock.uptimeMillis()
+        fun seconds() = ((SystemClock.uptimeMillis() - started) / 1000.0).coerceAtMost(plan.TOTAL_S.toDouble())
+        val drawing = scope.launch {
+            while (true) {
+                val s = seconds()
+                val zone = plan.zone(s.toInt())
+                brushScreen?.update(zone, plan.zoneDone(s, zone), (s / plan.TOTAL_S).toFloat())
+                delay(BRUSH_FRAME_MS)
+            }
+        }
+        val seed = kotlin.random.Random.nextInt(100)
+        var recorded = false
+        try {
+            for (second in 0 until plan.TOTAL_S) {
+                val line = plan.line(second, seed) ?: continue
+                val wait = started + second * 1000L - SystemClock.uptimeMillis()
+                if (wait > 0) delay(wait)
+                val zoneChange = second % plan.ZONE_S == 0
+                if (zoneChange || seconds() - second < BRUSH_LATE_S) say(line)
+            }
+            val left = started + plan.TOTAL_S * 1000L - SystemClock.uptimeMillis()
+            if (left > 0) delay(left)
+            drawing.cancel()
+            brushScreen?.update(com.speedy.assistant.brushing.BrushPlan.Zone.LOWER_RIGHT, 1f, 1f)
+            val result = stars.record(name, System.currentTimeMillis())
+            recorded = true
+            Log.i(TAG, "чищення зубів ($name): $result")
+            face.setMood(Mood.HAPPY)
+            val female = when (profiles?.gender(name)) {
+                com.speedy.assistant.people.Gender.FEMALE -> true
+                com.speedy.assistant.people.Gender.MALE -> false
+                else -> null
+            }
+            say(com.speedy.assistant.brushing.BrushText.finished(result, female))
+        } finally {
+            drawing.cancel()
+            brushScreen?.hide()
+            // Зупинили дотиком майже наприкінці — зірочка однаково заслужена (мовчки: дотик — це "тихо").
+            if (!recorded && seconds() >= plan.COUNTS_FROM_S) stars.record(name, System.currentTimeMillis())
+        }
     }
 
     /** Урок письма: обвести пальцем обриси на екрані (без моделі й інтернету). */
@@ -3108,6 +3178,9 @@ class Assistant(
         const val LAUNCH_CHECK_DELAY_MS = 5_000L
         /** Просте "продовжуй" — про книгу, якщо читали протягом цього часу. */
         const val BARE_CONTINUE_MS = 30 * 60_000L
+        /** Чищення зубів: як часто перемальовувати зуби; підбадьорення, запізніле на стільки секунд, — не казати. */
+        const val BRUSH_FRAME_MS = 200L
+        const val BRUSH_LATE_S = 4
         /** Скільки сторінок з пошуку відкривати в пошуках тексту казки. */
         const val MAX_TALE_PAGES = 5
         /** Підтека для переказу казки (лише останній; серед знайдених казок не шукаємо). */

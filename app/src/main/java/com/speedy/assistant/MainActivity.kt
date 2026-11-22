@@ -26,6 +26,7 @@ import com.speedy.assistant.robot.AutoRobotPlatform
 import com.speedy.assistant.robot.RobotDiscovery
 import com.speedy.assistant.settings.AppSettings
 import com.speedy.assistant.settings.SettingsDialog
+import com.speedy.assistant.util.writeTextAtomic
 import com.speedy.assistant.update.UpdateManager
 import com.speedy.assistant.vision.CameraSnapshot
 import com.speedy.assistant.vision.FaceBook
@@ -187,6 +188,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(android.widget.FrameLayout(this).apply {
             addView(face, android.widget.FrameLayout.LayoutParams(-1, -1))
             addView(traceView.apply { visibility = View.GONE }, android.widget.FrameLayout.LayoutParams(-1, -1))
+            // Чищення зубів: дотиків не перехоплює — дотик до обличчя, як завжди, зупиняє.
+            addView(brushView.apply { visibility = View.GONE }, android.widget.FrameLayout.LayoutParams(-1, -1))
         })
 
         val needed = arrayOf(
@@ -342,6 +345,11 @@ class MainActivity : AppCompatActivity() {
             },
             personInPhoto = { jpeg -> presence?.personIn(jpeg) },
             tracer = tracer,
+            brushScreen = brushScreen,
+            brushStars = com.speedy.assistant.brushing.BrushStars(
+                read = { java.io.File(filesDir, "brushing.json").takeIf { it.exists() }?.readText() },
+                write = { text -> java.io.File(filesDir, "brushing.json").writeTextAtomic(text) },
+            ),
             things = thingMemory,
             home = smartHome,
             lookJson = { system, prompt, jpeg -> llm.generateJson(system, prompt, jpeg, paidOnly = settings.thingsPaidOnly) },
@@ -610,6 +618,15 @@ class MainActivity : AppCompatActivity() {
     private var nightMode = false
 
     private val traceView by lazy { com.speedy.assistant.face.TraceView(this) }
+    private val brushView by lazy { com.speedy.assistant.face.BrushView(this) }
+
+    /** Чищення зубів: зуби з мікробиками над маленькими очима. */
+    private val brushScreen = object : com.speedy.assistant.brushing.BrushScreen {
+        override fun show() = runOnUiThread { face.showPicture(listOf(emptyList())) }
+        override fun update(zone: com.speedy.assistant.brushing.BrushPlan.Zone, zoneDone: Float, total: Float) =
+            runOnUiThread { brushView.update(zone, zoneDone, total) }
+        override fun hide() = runOnUiThread { brushView.clear(); face.showPicture(null) }
+    }
 
     /** Урок письма: показати обрис, дочекатися обведення (або [idleMs] без дотиків). */
     private val tracer = object : com.speedy.assistant.school.Tracer {
