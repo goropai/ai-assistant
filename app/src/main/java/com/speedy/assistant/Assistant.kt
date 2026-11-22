@@ -39,6 +39,7 @@ import com.speedy.assistant.books.Books
 import com.speedy.assistant.books.Lang
 import com.speedy.assistant.books.Place
 import java.io.File
+import com.speedy.assistant.util.writeTextAtomic
 
 /**
  * Оркестратор: почути -> подумати (LLM) -> подивитись/поїхати -> відповісти.
@@ -60,6 +61,14 @@ class Assistant(
     private val pets: com.speedy.assistant.vision.Pets? = null,
     /** Пошук в інтернеті: модель (Google / Claude web search), запасний — Вікіпедія. */
     private val webSearch: (suspend (String) -> String?)? = null,
+    /** Довгий текст з інтернету через модель (переказ казки, коли сторінки з текстом немає); null — не вміє. */
+    private val findText: (suspend (prompt: String) -> String?)? = null,
+    /** Адреси сторінок за пошуковим запитом (пошук моделі). */
+    private val findPages: suspend (query: String) -> List<String> = { emptyList() },
+    /** HTML сторінки (до кількох МБ); null — не відкрилась. */
+    private val fetchPage: suspend (url: String) -> String? = { null },
+    /** Де зберігати знайдені казки (files/tales). */
+    private val talesDir: File? = null,
     private val memory: com.speedy.assistant.brain.Memory? = null,
     private val phone: com.speedy.assistant.phone.PhoneActions? = null,
     private val currency: com.speedy.assistant.weather.Currency? = null,
@@ -1157,6 +1166,8 @@ class Assistant(
             // Закривати нічого — так і кажемо (модель повернула б ту саму команду).
             if (c is com.speedy.assistant.media.OnlineVideoCommands.Command.Close) return say("Відео зараз ніде не грає.")
         }
+        // "Знайди казку про пана Коцького" — серед книг, інакше текст з інтернету (до VLC: "почитай" — не аудіо).
+        com.speedy.assistant.books.Tales.parse(command)?.let { if (handleTale(it)) return }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return }
         // Книги вголос — без моделі ("почитай Кобзаря" без такої книги — далі, до моделі).
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return }
@@ -1327,6 +1338,7 @@ class Assistant(
             if (!handleOnlineVideo(c)) say(if (c is com.speedy.assistant.media.OnlineVideoCommands.Command.Close) "Відео зараз ніде не грає." else "Список відео зараз не відкритий.")
             return true
         }
+        com.speedy.assistant.books.Tales.parse(command)?.let { if (handleTale(it)) return true }
         com.speedy.assistant.media.MediaCommands.parse(command)?.let { if (handleMedia(it)) return true }
         com.speedy.assistant.books.BookCommands.parse(command)?.let { if (handleBook(it)) return true }
         // Телефон: календар, будильник, таймер, дзвінок (лише номеронабирач — "Виклик" тисне людина).
@@ -2092,6 +2104,51 @@ class Assistant(
     private var lastReadAt = Long.MIN_VALUE / 2
 
     /** @return false — це не про книги (хай відповідає модель). */
+    /** Казка: є серед книг (чи вже знаходили) — читаємо; інакше шукаємо текст в інтернеті й читаємо. */
+    private suspend fun handleTale(query: String): Boolean {
+        val shelf = books ?: return false
+        val dir = talesDir ?: return false
+        Log.i(TAG, "казка: $query")
+        face.setMood(Mood.THINKING)
+        val local = if (hasFileAccess()) withContext(Dispatchers.IO) { shelf.find(query) } else null
+        val saved = withContext(Dispatchers.IO) {
+            dir.listFiles()?.filter { it.isFile }?.let { files -> com.speedy.assistant.books.Bookshelf.best(query, files) }
+        }
+        (local ?: saved)?.let { readBook(it, from = Place(0, 0)); return true }
+        say("Шукаю казку в інтернеті, хвилинку.")
+        // Повний текст — зі сторінки (модель з пошуком бачить лише уривки й переказує); немає — переказ моделі.
+        val page = fullTale(query)
+        val found = page ?: findText?.invoke(com.speedy.assistant.books.Tales.prompt(query))
+            ?.let { com.speedy.assistant.books.Tales.found(it) }
+            ?: return true.also { face.setMood(Mood.SAD); say("Не знайшла такої казки. Можу розповісти іншу — скажи, про що.") }
+        // Зберігаємо лише повний текст; переказ — тимчасово (наступного разу пошукаємо текст знову).
+        val file = withContext(Dispatchers.IO) {
+            val where = if (page != null) dir else File(dir, RETOLD_DIR).also { it.deleteRecursively() }
+            where.mkdirs()
+            File(where, com.speedy.assistant.books.Tales.fileName(found.title)).also { it.writeTextAtomic(found.text) }
+        }
+        Log.i(TAG, "казка «${found.title}» (${if (page != null) "повний текст" else "переказ"}): ${found.text.length} символів → ${file.name}")
+        val intro = if (page != null) "Знайшла! Казка «${found.title}». Щоб зупинити, торкнись мене."
+            else "Повного тексту не знайшла, тож розповім своїми словами. Казка «${found.title}»."
+        readBook(file, from = Place(0, 0), intro = intro)
+        return true
+    }
+
+    /** Повний текст казки з першої сторінки пошуку, де він є; null — не знайшлося. */
+    private suspend fun fullTale(query: String): com.speedy.assistant.books.Tales.Found? {
+        val pages = findPages(com.speedy.assistant.books.Tales.pagesQuery(query)).take(MAX_TALE_PAGES)
+        Log.i(TAG, "казка: сторінок ${pages.size}")
+        for (url in pages) {
+            val html = fetchPage(url) ?: continue
+            val text = withContext(Dispatchers.Default) { com.speedy.assistant.books.Tales.extract(html, query) }
+            if (text == null) { Log.i(TAG, "казка: на ${url.take(80)} тексту немає"); continue }
+            val title = com.speedy.assistant.books.Tales.pageTitle(html) ?: query.replaceFirstChar { it.uppercase() }
+            Log.i(TAG, "казка: текст із ${url.take(80)}")
+            return com.speedy.assistant.books.Tales.Found(title, text)
+        }
+        return null
+    }
+
     private suspend fun handleBook(cmd: BookCommand): Boolean {
         val shelf = books ?: return false
         // "Продовжуй" після паузи аудіо у VLC (дотик) — грає далі.
@@ -2886,11 +2943,15 @@ class Assistant(
                 say(if (list.isEmpty()) "Пристроїв розумного дому не бачу." else list.take(8).joinToString(". ") { com.speedy.assistant.home.HomeText.state(it) } + ".")
             }
             is com.speedy.assistant.home.HomeCommands.Command.Query -> {
-                // Датчик лише з Bluetooth: розмова з ним — кілька секунд, тож попередити.
-                if (cmd.targets.take(6).any { h.mayUseBluetooth(it) }) say("Хвилинку, питаю по Bluetooth.")
-                val fresh = h.refresh(cmd.targets.take(6))
-                val lines = fresh.map { com.speedy.assistant.home.HomeText.state(it, h.scales(it)) }
-                say(lines.joinToString(". ") + ".")
+                val targets = cmd.targets.take(6)
+                if (targets.none { h.mayUseBluetooth(it) }) {
+                    val lines = h.refresh(targets).map { com.speedy.assistant.home.HomeText.state(it, h.scales(it)) }
+                    say(lines.joinToString(". ") + ".")
+                } else {
+                    // Датчик лише з Bluetooth: розмова з ним — до хвилини, тож попередити. Кожен кажемо, щойно прочитали.
+                    say("Хвилинку, питаю по Bluetooth.")
+                    h.refreshEach(targets) { say(com.speedy.assistant.home.HomeText.state(it, h.scales(it)) + ".") }
+                }
             }
             else -> {
                 val targets = when (cmd) {
@@ -3047,6 +3108,10 @@ class Assistant(
         const val LAUNCH_CHECK_DELAY_MS = 5_000L
         /** Просте "продовжуй" — про книгу, якщо читали протягом цього часу. */
         const val BARE_CONTINUE_MS = 30 * 60_000L
+        /** Скільки сторінок з пошуку відкривати в пошуках тексту казки. */
+        const val MAX_TALE_PAGES = 5
+        /** Підтека для переказу казки (лише останній; серед знайдених казок не шукаємо). */
+        const val RETOLD_DIR = "retold"
         const val MAX_LISTED = 6
         /** "Я Ліна" діє стільки після останньої такої репліки. */
         const val CLAIM_MS = 3 * 60_000L

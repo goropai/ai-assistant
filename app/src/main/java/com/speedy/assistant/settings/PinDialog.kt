@@ -45,6 +45,17 @@ object PinDialog {
         textSize = 24f
     }
 
+    /** Фокус у поле й одразу цифрова клавіатура (сама AlertDialog її не відкриває). */
+    private fun keyboard(dialog: AlertDialog, field: EditText) {
+        dialog.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        field.requestFocus()
+        // Після того, як вікно отримало фокус, — інакше J5 клавіатуру ігнорує.
+        field.postDelayed({
+            val imm = field.context.getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.showSoftInput(field, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }, 150)
+    }
+
     private fun voiceHint(context: Context) = TextView(context).apply {
         text = "…або скажіть його вголос, по цифрі"
         textSize = 13f
@@ -97,6 +108,7 @@ object PinDialog {
                     }
                 }
             }
+            keyboard(dialog, first)
             // Голосом: перший раз — у перше поле, другий — підтвердження й зберегти.
             listen(dialog) { pin ->
                 if (!Pin.valid(first.text.toString())) first.setText(pin)
@@ -160,6 +172,7 @@ object PinDialog {
                     Toast.makeText(context, "Неправильний PIN", Toast.LENGTH_SHORT).show()
                 }
             }
+            keyboard(dialog, field)
             listen(dialog) { pin -> field.setText(pin); ok.performClick() }
         }
         dialog.show()

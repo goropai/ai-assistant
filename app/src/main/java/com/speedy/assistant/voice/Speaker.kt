@@ -17,9 +17,9 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class Speaker(
     private val context: Context,
-    private val pitch: Float,
-    private val rate: Float,
-    private val preferredVoice: String,
+    private var pitch: Float,
+    private var rate: Float,
+    private var preferredVoice: String,
 ) {
     private val ready = CompletableDeferred<Boolean>()
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
@@ -68,11 +68,14 @@ class Speaker(
         }
         val voices = tts.voices.orEmpty().filter { it.locale.language == "uk" }
         Log.i(TAG, "Доступні голоси: ${voices.map { it.name }}")
+        ukrainianVoices = voices.sortedBy { it.name }
+        defaultVoice = tts.voice
         voices.firstOrNull { it.name == preferredVoice }?.let { tts.voice = it }
         ukrainianVoice = tts.voice
 
         tts.setPitch(pitch)
         tts.setSpeechRate(rate)
+        configured = true
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) {
@@ -86,8 +89,26 @@ class Speaker(
         return true
     }
 
-    /** Промовляє текст і повертається, коли мовлення завершилось. */
     private var ukrainianVoice: android.speech.tts.Voice? = null
+    /** Голос синтезатора за замовчуванням (коли в налаштуваннях голос не вибрано). */
+    private var defaultVoice: android.speech.tts.Voice? = null
+    @Volatile private var configured = false
+    @Volatile private var ukrainianVoices: List<android.speech.tts.Voice> = emptyList()
+
+    /** Українські голоси синтезатора (назви); порожньо — ще не готовий. */
+    val voiceNames: List<String> get() = ukrainianVoices.map { it.name }.filterNot { it.endsWith("-language") } // загальний голос мови, не окремий
+
+    /** Змінити голос (налаштування, пробне прослуховування): висота, швидкість, голос ("" — за замовчуванням). */
+    fun setVoice(pitch: Float, rate: Float, voiceName: String) {
+        this.pitch = pitch
+        this.rate = rate
+        preferredVoice = voiceName
+        if (!configured) return // configure() візьме нові значення
+        tts.setPitch(pitch)
+        tts.setSpeechRate(rate)
+        ukrainianVoice = ukrainianVoices.firstOrNull { it.name == voiceName } ?: defaultVoice ?: ukrainianVoice
+        if (current == UKRAINIAN) ukrainianVoice?.let { tts.voice = it }
+    }
 
     /** Мова, якою синтезатор зараз налаштований (перемикаємо лише при зміні — книги говорять фрагментами). */
     private var current: Locale = UKRAINIAN

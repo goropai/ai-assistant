@@ -108,13 +108,33 @@ class ClaudeClient(
     }
 
     /** Вбудований веб-пошук Claude (серверний інструмент): звичайний текст, без JSON-формату. */
-    override suspend fun search(query: String): String? = withContext(Dispatchers.IO) {
+    override suspend fun search(query: String): String? = webSearch(searchPrompt(query), maxTokens = 1024, http, ::answerText)
+
+    /** Довгий текст (казка) — теж із веб-пошуком. */
+    override suspend fun findText(prompt: String): String? = webSearch(prompt, maxTokens = 8000, textHttp, ::answerText)
+
+    /** Адреси з результатів веб-пошуку (web_search_tool_result). */
+    override suspend fun findPages(query: String): List<String> = webSearch(pagesPrompt(query), maxTokens = 1024, http) { content ->
+        content.filter { it.optString("type") == "web_search_tool_result" }
+            .flatMap { block -> block.optJSONArray("content").let { r -> (0 until (r?.length() ?: 0)).mapNotNull { r!!.optJSONObject(it) } } }
+            .mapNotNull { it.optString("url").ifBlank { null } }.distinct().ifEmpty { null }
+    }.orEmpty()
+
+    private fun answerText(content: List<JSONObject>): String? =
+        content.filter { it.optString("type") == "text" }.joinToString("") { it.optString("text") }.trim().ifBlank { null }
+
+    /** Відповідь не потоком — довгий текст генерується хвилину й більше. */
+    private val textHttp by lazy { http.newBuilder().readTimeout(120, java.util.concurrent.TimeUnit.SECONDS).build() }
+
+    private suspend fun <T> webSearch(
+        prompt: String, maxTokens: Int, client: OkHttpClient, extract: (List<JSONObject>) -> T?,
+    ): T? = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("model", model)
-            .put("max_tokens", 1024)
+            .put("max_tokens", maxTokens)
             .put("output_config", JSONObject().put("effort", "low"))
             .put("tools", JSONArray().put(JSONObject().put("type", "web_search_20260209").put("name", "web_search").put("max_uses", 3)))
-            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", searchPrompt(query))))
+            .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", prompt)))
         val request = Request.Builder()
             .url("https://api.anthropic.com/v1/messages")
             .header("x-api-key", apiKey)
@@ -122,16 +142,14 @@ class ClaudeClient(
             .post(body.toString().toRequestBody(JSON))
             .build()
         try {
-            http.newCall(request).execute().use { response ->
+            client.newCall(request).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
                     Log.w(TAG, "search HTTP ${response.code}: ${text.take(200)}")
                     return@use null
                 }
                 val content = JSONObject(text).optJSONArray("content") ?: return@use null
-                (0 until content.length()).map { content.getJSONObject(it) }
-                    .filter { it.optString("type") == "text" }
-                    .joinToString("") { it.optString("text") }.trim().ifBlank { null }
+                extract((0 until content.length()).map { content.getJSONObject(it) })
             }
         } catch (e: java.io.IOException) {
             Log.w(TAG, "search: ${e.message}")

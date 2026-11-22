@@ -154,6 +154,10 @@ class AppSettings(context: Context) {
     private fun str(key: String) = prefs.getString(key, null).orEmpty()
     private fun put(key: String, value: String) = prefs.edit().putString(key, value.trim()).apply()
 
+    /** Голос: варіант висоти й швидкості ([VoicePreset]) і голос синтезатора (порожньо — як у збірці). */
+    var voicePreset: String get() = str("voice_preset"); set(v) = put("voice_preset", v)
+    var voiceName: String get() = str("voice_name"); set(v) = put("voice_name", v)
+
     var guardTelegramToken: String get() = str("guard_tg_token"); set(v) = put("guard_tg_token", v)
     var guardTelegramChat: String get() = str("guard_tg_chat"); set(v) = put("guard_tg_chat", v)
     /** Пошта: сервер SMTP (порт 465 — SSL, 587 — STARTTLS), логін, пароль застосунку, кому. */

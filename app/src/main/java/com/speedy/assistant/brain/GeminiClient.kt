@@ -34,6 +34,7 @@ class GeminiClient(
     private val firstHttp = http.newBuilder().readTimeout(6, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).build()
     private val fallbackHttp = http.newBuilder().readTimeout(5, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build()
     private val searchHttp = http.newBuilder().callTimeout(20, TimeUnit.SECONDS).build()
+    private val textHttp = http.newBuilder().readTimeout(60, TimeUnit.SECONDS).callTimeout(90, TimeUnit.SECONDS).build()
 
     override suspend fun complete(system: String, history: List<Turn>): String = stream(system, history) {}
 
@@ -158,11 +159,29 @@ class GeminiClient(
     }
 
     /** Пошук Google через grounding: звичайний текст (JSON-формат із пошуком не поєднується). */
-    override suspend fun search(query: String): String? = withContext(Dispatchers.IO) {
+    override suspend fun search(query: String): String? = grounded(searchPrompt(query), searchHttp, ::answerText)
+
+    /** Довгий текст (казка) — теж із пошуком, але відповідь довша, тож і чекаємо довше. */
+    override suspend fun findText(prompt: String): String? = grounded(prompt, textHttp, ::answerText)
+
+    /** Сторінки, на які спирався пошук (groundingChunks; адреси — переадресація Google на справжню сторінку). */
+    override suspend fun findPages(query: String): List<String> = grounded(pagesPrompt(query), searchHttp) { response ->
+        val chunks = response.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("groundingMetadata")
+            ?.optJSONArray("groundingChunks") ?: return@grounded null
+        (0 until chunks.length()).mapNotNull { chunks.optJSONObject(it)?.optJSONObject("web")?.optString("uri")?.ifBlank { null } }
+            .distinct().ifEmpty { null }
+    }.orEmpty()
+
+    private fun answerText(response: JSONObject): String? {
+        val parts = response.optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts") ?: return null
+        return (0 until parts.length()).joinToString("") { parts.getJSONObject(it).optString("text") }.trim().ifBlank { null }
+    }
+
+    private suspend fun <T> grounded(prompt: String, client: OkHttpClient, extract: (JSONObject) -> T?): T? = withContext(Dispatchers.IO) {
         refreshModelList()
         for (candidate in models.order(model, now(), max = 2)) {
             val body = JSONObject()
-                .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", searchPrompt(query))))))
+                .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
                 .put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
             val request = Request.Builder()
                 .url("$BASE/models/$candidate:generateContent")
@@ -170,15 +189,13 @@ class GeminiClient(
                 .post(body.toString().toRequestBody(JSON))
                 .build()
             try {
-                searchHttp.newCall(request).execute().use { response ->
+                client.newCall(request).execute().use { response ->
                     val text = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
                         Log.w(TAG, "search $candidate HTTP ${response.code}: ${text.take(200)}")
                         return@use null
                     }
-                    val parts = JSONObject(text).optJSONArray("candidates")?.optJSONObject(0)
-                        ?.optJSONObject("content")?.optJSONArray("parts") ?: return@use null
-                    (0 until parts.length()).joinToString("") { parts.getJSONObject(it).optString("text") }.trim().ifBlank { null }
+                    extract(JSONObject(text))
                 }?.let { return@withContext it }
             } catch (e: IOException) {
                 Log.w(TAG, "search $candidate: ${e.message}")

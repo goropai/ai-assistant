@@ -68,6 +68,8 @@ object HomeCommands {
     private val overview = Regex("^(?:що\\s+вдома|стан\\s+(?:розумного\\s+)?дому|які\\s+(?:в\\s+мене\\s+|у\\s+нас\\s+)?(?:є\\s+)?(?:розумні\\s+)?пристрої)$")
     private val all = Regex("(?:^|\\s)(?:все|усе|всі|усі|скрізь|всюди)(?:\\s|$)")
     private val home = Regex("(?:^|\\s)(?:вдома|удома|в\\s+квартирі|в\\s+домі|в\\s+хаті)(?:\\s|$)")
+    /** "В приміщенні", "тут", "у нас" — усі датчики, якщо жоден не підійшов за назвою. */
+    private val indoor = Regex("(?:^|\\s)(?:приміщенн\\p{L}*|кімнат\\p{L}*|тут|[ву]\\s+нас)(?:\\s|$)")
     private val stop = setOf("на", "в", "у", "біля", "все", "усе", "всі", "усі", "будь", "ласка", "мені", "нам", "будь-ласка", "зараз", "там", "до")
 
     private fun normalize(phrase: String) = phrase.lowercase().replace('ʼ', '\'').replace('’', '\'')
@@ -107,6 +109,7 @@ object HomeCommands {
             val sensors = devices.filter { d -> d.status.keys.any { it in TEMP_CODES || it in HUMIDITY_CODES } }
             if (home.containsMatchIn(m.groupValues[1])) return sensors.takeIf { it.isNotEmpty() }?.let { Command.Query(it) }
             return pick(m.groupValues[1], sensors) { Command.Query(it) }
+                ?: if (indoor.containsMatchIn(m.groupValues[1]) && sensors.isNotEmpty()) Command.Query(sensors) else null
         }
         contact.find(t)?.let { m ->
             val sensors = devices.filter { it.status.containsKey("doorcontact_state") }

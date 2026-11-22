@@ -118,6 +118,42 @@ class MainActivity : AppCompatActivity() {
             .build()
     }
 
+    /** HTML сторінки для тексту казки: до 3 МБ, кодування — із заголовка, <meta> чи вгадане. null — не вдалось. */
+    private suspend fun fetchPage(url: String): String? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val request = okhttp3.Request.Builder().url(url)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 7.1) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
+            .build()
+        try {
+            pageHttp.newCall(request).execute().use { response ->
+                val body = response.body ?: return@use null
+                if (!response.isSuccessful || body.contentType()?.subtype?.contains("html") == false) return@use null
+                val bytes = body.byteStream().use { it.readNBytesCompat(3 shl 20) }
+                val declared = body.contentType()?.charset()?.name()
+                    ?: com.speedy.assistant.books.Tales.metaCharset(String(bytes, 0, minOf(bytes.size, 4096), Charsets.ISO_8859_1))
+                android.util.Log.i("MainActivity", "сторінка: ${response.request.url.toString().take(120)}")
+                com.speedy.assistant.books.Books.decode(bytes, declared)
+            }
+        } catch (e: java.io.IOException) {
+            android.util.Log.w("MainActivity", "сторінка ${url.take(80)}: ${e.message}")
+            null
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+    }
+
+    private val pageHttp by lazy { http.newBuilder().callTimeout(20, TimeUnit.SECONDS).build() }
+
+    private fun java.io.InputStream.readNBytesCompat(max: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(16 shl 10)
+        while (out.size() < max) {
+            val n = read(buf, 0, minOf(buf.size, max - out.size()))
+            if (n < 0) break
+            out.write(buf, 0, n)
+        }
+        return out.toByteArray()
+    }
+
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
             if (granted[Manifest.permission.RECORD_AUDIO] == true) initAssistant()
@@ -172,7 +208,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun initAssistant() {
         if (assistant != null) return
-        val voice = Speaker(this, BuildConfig.TTS_PITCH, BuildConfig.TTS_RATE, BuildConfig.TTS_VOICE)
+        val preset = com.speedy.assistant.settings.VoicePreset.of(settings.voicePreset)
+        val voice = Speaker(this, preset.pitch(BuildConfig.TTS_PITCH), preset.rate(BuildConfig.TTS_RATE), voiceName())
         speaker = voice
         // Люди й тварини — у базі; перший запуск після оновлення переносить старі JSON (лишаються *.migrated).
         db.importJson(java.io.File(filesDir, "faces.json"), java.io.File(filesDir, "profiles.json"), java.io.File(filesDir, "pets.json"))
@@ -231,6 +268,13 @@ class MainActivity : AppCompatActivity() {
             pets = pets,
             webSearch = { query ->
                 llm.search(query) ?: wikipedia.summary(query)?.let { "(Довідка з Вікіпедії — свіжих новин, цін і курсів тут немає.) $it" }
+            },
+            findText = { prompt -> llm.findText(prompt) },
+            findPages = { query -> llm.findPages(query) },
+            fetchPage = { url -> fetchPage(url) },
+            talesDir = java.io.File(filesDir, "kazky").also {
+                // Стара тека (до 0.18): там упереміш повні тексти й перекази моделі — геть, знайдемо знову.
+                java.io.File(filesDir, "tales").takeIf { old -> old.exists() }?.deleteRecursively()
             },
             memory = memory,
             phone = com.speedy.assistant.phone.PhoneActions(this),
@@ -442,7 +486,18 @@ class MainActivity : AppCompatActivity() {
             val home = SettingsDialog.Home { region, id, secret, done ->
                 lifecycleScope.launch { done(smartHome.check(region, id, secret)) }
             }
-            SettingsDialog.show(this, settings, family, guard, home) {
+            val voice = speaker?.let { s ->
+                SettingsDialog.Voice(s.voiceNames) { preset, name ->
+                    // Пробно — і одразу назад до збереженого (зберігає лише "Зберегти").
+                    lifecycleScope.launch {
+                        s.setVoice(preset.pitch(BuildConfig.TTS_PITCH), preset.rate(BuildConfig.TTS_RATE), name.ifBlank { BuildConfig.TTS_VOICE })
+                        s.speak("Привіт! Я Спіді. Ось так звучатиме мій голос.")
+                        applyVoice()
+                    }
+                }
+            }
+            SettingsDialog.show(this, settings, family, guard, home, voice) {
+                applyVoice()
                 smartHome.invalidate()
                 lifecycleScope.launch { smartHome.devices() }
                 face.setMood(if (settings.hasActiveKey) Mood.HAPPY else Mood.SAD)
@@ -451,6 +506,15 @@ class MainActivity : AppCompatActivity() {
                 requestGuardPermissions()
             }
         }
+    }
+
+    /** Голос синтезатора з налаштувань (порожньо — як у збірці). */
+    private fun voiceName() = settings.voiceName.ifBlank { BuildConfig.TTS_VOICE }
+
+    /** Застосувати збережений у налаштуваннях голос. */
+    private fun applyVoice() {
+        val preset = com.speedy.assistant.settings.VoicePreset.of(settings.voicePreset)
+        speaker?.setVoice(preset.pitch(BuildConfig.TTS_PITCH), preset.rate(BuildConfig.TTS_RATE), voiceName())
     }
 
     /** Один обхід сховища для книг і медіа (коли попросили; результат живе кілька хвилин). */

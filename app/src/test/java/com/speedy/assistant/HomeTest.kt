@@ -86,6 +86,9 @@ class HomeTest {
     fun queries() {
         assertEquals(listOf("Датчик спальня"), names(HomeCommands.parse("яка температура в спальні", DEVICES)))
         assertEquals(listOf("Датчик спальня"), names(HomeCommands.parse("яка вологість вдома", DEVICES)))
+        // Без назви датчика — усі датчики.
+        assertEquals(listOf("Датчик спальня"), names(HomeCommands.parse("яка зараз температура в приміщенні", DEVICES)))
+        assertEquals(listOf("Датчик спальня"), names(HomeCommands.parse("яка температура у нас", DEVICES)))
         assertEquals(listOf("Вікно кухня"), names(HomeCommands.parse("чи зачинене вікно на кухні", DEVICES)))
         assertEquals(listOf("Обігрівач"), names(HomeCommands.parse("чи увімкнений обігрівач", DEVICES)))
         assertEquals(Command.Overview, HomeCommands.parse("що вдома", DEVICES))

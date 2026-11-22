@@ -302,48 +302,87 @@ class TuyaBleClient(private val context: Context) {
     /** Адреса → варіант привітання, на який пристрій відповів (до перезапуску). */
     private val goodHello = HashMap<String, TuyaBleProtocol.Hello>()
 
-    @SuppressLint("MissingPermission")
-    suspend fun read(creds: BleCredentials, timeoutMs: Long = 35_000): Map<Int, Any>? = mutex.withLock {
-        val adapter = BluetoothAdapter.getDefaultAdapter() ?: return null
-        if (!adapter.isEnabled) {
-            Log.i(TAG, "Bluetooth вимкнено — вмикаю")
-            adapter.enable()
-            withTimeoutOrNull(8_000) { while (!adapter.isEnabled) delay(200) } ?: return null
-            delay(500)
-        }
-        val mac = creds.mac.uppercase().let { m -> if (':' in m) m else m.chunked(2).joinToString(":") }
-        if (!BluetoothAdapter.checkBluetoothAddress(mac)) return null
-        // Samsung на Android 7 до незнайденого в пошуку пристрою не підключається (помилка 133) — спершу знайти.
-        // TH05 приймає з'єднання лише одразу після своєї реклами: не вдалось — знову чекати реклами й одразу
-        // підключатися (кілька разів).
-        var found: android.bluetooth.BluetoothDevice? = null
-        for (attempt in 1..DIRECT_ATTEMPTS) {
-            found = scan(adapter, mac, if (attempt == 1) 90_000 else 30_000) ?: break
-            delay(300) // після зупинки пошуку стек має звільнитися
-            Session(found, creds, autoConnect = false).run(timeoutMs)?.let { return it }
-            if (attempt < DIRECT_ATTEMPTS) Log.i(TAG, "спроба $attempt не вдалась — чекаю наступної реклами")
-        }
-        found ?: return null.also { Log.w(TAG, "$mac не видно поруч (далеко чи сів)") }
-        // Датчик на батарейці приймає з'єднання короткими вікнами — хай стек сам чекає.
-        Log.i(TAG, "остання спроба: чекаю, доки датчик прийме з'єднання")
-        delay(1_000)
-        Session(found, creds, autoConnect = true).run(timeoutMs + 10_000)
+    /** Один пристрій: показники або null (не видно / не підключився). */
+    suspend fun read(creds: BleCredentials, scanMs: Long = SCAN_MS): Map<Int, Any>? {
+        var out: Map<Int, Any>? = null
+        readMany(listOf(creds), scanMs) { _, dps -> out = dps }
+        return out
     }
 
-    /** Пошук пристрою за адресою (до [ms]); null — не видно. */
+    /**
+     * Кілька пристроїв одним пошуком: кожного читаємо, щойно він з'явився в ефірі, і одразу віддаємо в [onRead]
+     * (null — не вдалось). За [scanMs] не з'явився — теж null. Порядок — хто перший вийшов в ефір.
+     */
     @SuppressLint("MissingPermission")
-    private suspend fun scan(adapter: BluetoothAdapter, mac: String, ms: Long = 90_000): android.bluetooth.BluetoothDevice? {
+    suspend fun readMany(
+        all: List<BleCredentials>, scanMs: Long = SCAN_MS, onRead: suspend (BleCredentials, Map<Int, Any>?) -> Unit,
+    ) = mutex.withLock {
+        val byMac = all.mapNotNull { c -> mac(c.mac)?.let { it to c } }.toMap()
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        if (adapter == null || !enable(adapter)) return@withLock all.forEach { onRead(it, null) }
+        all.filter { mac(it.mac) == null }.forEach { onRead(it, null) }
+        val left = byMac.keys.toMutableSet()
+        val deadline = android.os.SystemClock.uptimeMillis() + scanMs
+        while (left.isNotEmpty()) {
+            val wait = deadline - android.os.SystemClock.uptimeMillis()
+            val (mac, device) = (if (wait > 0) scan(adapter, left, wait) else null) ?: break
+            left -= mac
+            val creds = byMac.getValue(mac)
+            onRead(creds, connect(adapter, device, creds))
+        }
+        left.forEach { Log.w(TAG, "$it не видно поруч (далеко чи сів)"); onRead(byMac.getValue(it), null) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun enable(adapter: BluetoothAdapter): Boolean {
+        if (adapter.isEnabled) return true
+        Log.i(TAG, "Bluetooth вимкнено — вмикаю")
+        adapter.enable()
+        withTimeoutOrNull(8_000) { while (!adapter.isEnabled) delay(200) } ?: return false
+        delay(500)
+        return true
+    }
+
+    private fun mac(raw: String): String? =
+        raw.uppercase().let { m -> if (':' in m) m else m.chunked(2).joinToString(":") }.takeIf { BluetoothAdapter.checkBluetoothAddress(it) }
+
+    /**
+     * Samsung на Android 7 до незнайденого в пошуку пристрою не підключається (помилка 133) — тому [found] уже
+     * знайдений. TH05 приймає з'єднання лише одразу після своєї реклами: не вдалось — знову чекати реклами
+     * й одразу підключатися (кілька разів), наостанок — хай стек сам чекає (autoConnect).
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun connect(
+        adapter: BluetoothAdapter, found: android.bluetooth.BluetoothDevice, creds: BleCredentials, timeoutMs: Long = 35_000,
+    ): Map<Int, Any>? {
+        var device = found
+        for (attempt in 1..DIRECT_ATTEMPTS) {
+            delay(300) // після зупинки пошуку стек має звільнитися
+            Session(device, creds, autoConnect = false).run(timeoutMs)?.let { return it }
+            if (attempt == DIRECT_ATTEMPTS) break
+            Log.i(TAG, "спроба $attempt не вдалась — чекаю наступної реклами")
+            device = scan(adapter, setOf(device.address), RESCAN_MS)?.second ?: break
+        }
+        Log.i(TAG, "остання спроба: чекаю, доки датчик прийме з'єднання")
+        delay(1_000)
+        return Session(device, creds, autoConnect = true).run(timeoutMs + 10_000)
+    }
+
+    /** Пошук будь-якого з пристроїв [macs] (до [ms]): адреса й пристрій, null — нікого не видно. */
+    @SuppressLint("MissingPermission")
+    private suspend fun scan(adapter: BluetoothAdapter, macs: Set<String>, ms: Long): Pair<String, android.bluetooth.BluetoothDevice>? {
         val scanner = adapter.bluetoothLeScanner ?: return null
-        val result = CompletableDeferred<android.bluetooth.BluetoothDevice>()
+        val result = CompletableDeferred<Pair<String, android.bluetooth.BluetoothDevice>>()
         val cb = object : android.bluetooth.le.ScanCallback() {
             override fun onScanResult(callbackType: Int, r: android.bluetooth.le.ScanResult) {
-                if (!r.device.address.equals(mac, ignoreCase = true)) return
+                val mac = macs.firstOrNull { r.device.address.equals(it, ignoreCase = true) } ?: return
+                if (result.isCompleted) return
                 val rec = r.scanRecord
                 // Дані служби: перший байт — прапорці (спостереження TH05: 0x49 — звичайний, 0x41 — режим спарювання).
                 Log.i(TAG, "знайшла $mac, сигнал ${r.rssi} дБм; реклама: служби ${rec?.serviceUuids}, " +
                     "дані служб ${rec?.serviceData?.mapValues { it.value.joinToString("") { b -> "%02x".format(b) } }}, " +
                     "виробник ${rec?.manufacturerSpecificData?.let { m -> (0 until m.size()).associate { m.keyAt(it) to m.valueAt(it).joinToString("") { b -> "%02x".format(b) } } }}")
-                result.complete(r.device)
+                result.complete(mac to r.device)
             }
 
             override fun onScanFailed(errorCode: Int) {
@@ -351,7 +390,7 @@ class TuyaBleClient(private val context: Context) {
             }
         }
         val settings = android.bluetooth.le.ScanSettings.Builder().setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        val filters = listOf(android.bluetooth.le.ScanFilter.Builder().setDeviceAddress(mac).build())
+        val filters = macs.map { android.bluetooth.le.ScanFilter.Builder().setDeviceAddress(it).build() }
         scanner.startScan(filters, settings, cb)
         return try {
             withTimeoutOrNull(ms) { result.await() }
@@ -538,6 +577,10 @@ class TuyaBleClient(private val context: Context) {
         private const val TAG = "TuyaBle"
         /** Скільки разів "знайти → одразу підключитися" перед запасним autoConnect. */
         private const val DIRECT_ATTEMPTS = 3
+        /** Скільки чекати першої реклами: TH05 рекламується рідко. */
+        const val SCAN_MS = 90_000L
+        /** Після невдалої спроби — стільки чекати наступної реклами того самого пристрою. */
+        private const val RESCAN_MS = 30_000L
         val SERVICE: UUID = UUID.fromString("00001910-0000-1000-8000-00805f9b34fb")
         val NOTIFY: UUID = UUID.fromString("00002b10-0000-1000-8000-00805f9b34fb")
         val WRITE: UUID = UUID.fromString("00002b11-0000-1000-8000-00805f9b34fb")

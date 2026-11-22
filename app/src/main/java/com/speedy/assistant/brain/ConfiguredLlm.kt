@@ -44,6 +44,10 @@ class ConfiguredLlm(
 
     override suspend fun search(query: String): String? = firstNonNull { it.search(query) }
 
+    override suspend fun findText(prompt: String): String? = firstNonNull { it.findText(prompt) }
+
+    override suspend fun findPages(query: String): List<String> = firstNonNull { it.findPages(query).ifEmpty { null } }.orEmpty()
+
     override suspend fun generateJson(system: String, prompt: String, image: ByteArray?): String? =
         generateJson(system, prompt, image, paidOnly = false)
 

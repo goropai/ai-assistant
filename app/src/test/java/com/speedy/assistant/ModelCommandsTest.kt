@@ -39,6 +39,7 @@ class ModelCommandsTest {
         }
         if (TranslateCommands.parse(command) != null) return true
         if (com.speedy.assistant.media.OnlineVideoCommands.parse(command) != null) return true
+        if (com.speedy.assistant.books.Tales.parse(command) != null) return true
         if (MediaCommands.parse(command) != null) return true
         if (BookCommands.parse(command) != null) return true
         return when (PhoneCommands.parse(command)) {
@@ -69,6 +70,7 @@ class ModelCommandsTest {
             "огляд новин", "скасуй нагадування", "яке повітря", "де ти", "вартуй",
             "де мої окуляри", "що змінилось у кімнаті",
             "увімкни Лампа кухня", "вимкни Розетка чайник", "яскравість 30 відсотків Лампа кухня", "закрий Штори спальня", "що вдома",
+            "яка температура Датчик спальня", "яка температура вдома", "знайди казку Пан Коцький",
             "увімкни перше відео", "увімкни друге відео", "увімкни третє відео", "закрий відео",
         ).forEach { assertTrue("модель скаже «$it», а Спіді не зрозуміє", understood(it)) }
     }

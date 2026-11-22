@@ -94,32 +94,50 @@ class SmartHome(
         ble != null && !d.online && SystemClock.uptimeMillis() - (bleFailedAt[d.id] ?: Long.MIN_VALUE / 2) > BLE_RETRY_MS &&
             bleCreds.getOrDefault(d.id, BleCredentials("", "", "", "")) != null
 
-    /** Свіжий стан цих пристроїв (для "яка температура…"): офлайн у хмарі — по Bluetooth напряму. */
+    /** Свіжий стан цих пристроїв (для "яка температура…"); див. [refreshEach]. */
     suspend fun refresh(targets: List<HomeDevice>): List<HomeDevice> {
-        val c = cloud() ?: return targets
-        val fresh = targets.map { d ->
-            if (mayUseBluetooth(d)) viaBluetooth(c, d)?.let { return@map it }
-            try { d.copy(status = c.status(d.id)) } catch (e: java.io.IOException) { Log.w(TAG, "стан ${d.name}: ${e.message}"); d }
-        }
-        devices = devices.map { d -> fresh.firstOrNull { it.id == d.id } ?: d }
-        return fresh
+        val out = HashMap<String, HomeDevice>()
+        refreshEach(targets) { out[it.id] = it }
+        return targets.map { out[it.id] ?: it }
     }
 
-    /** Показники напряму по Bluetooth (Спіді як шлюз); null — не вдалось. */
-    private suspend fun viaBluetooth(c: TuyaCloud, d: HomeDevice): HomeDevice? {
-        val client = ble ?: return null
-        val creds = if (bleCreds.containsKey(d.id)) bleCreds[d.id] else try {
+    /**
+     * Свіжий стан кожного пристрою — у [onFresh], щойно відомий: з хмари одразу, офлайн у хмарі — по Bluetooth
+     * напряму (усі такі одним пошуком до [TuyaBleClient.SCAN_MS]; хто не з'явився — останні хмарні показники).
+     */
+    suspend fun refreshEach(targets: List<HomeDevice>, onFresh: suspend (HomeDevice) -> Unit) {
+        val c = cloud() ?: return targets.forEach { onFresh(it) }
+        suspend fun fromCloud(d: HomeDevice) =
+            try { d.copy(status = c.status(d.id)) } catch (e: java.io.IOException) { Log.w(TAG, "стан ${d.name}: ${e.message}"); d }
+        suspend fun publish(d: HomeDevice) {
+            devices = devices.map { if (it.id == d.id) d else it }
+            onFresh(d)
+        }
+        val viaBle = targets.filter { mayUseBluetooth(it) }.associateWith { credentials(c, it) }.filterValues { it != null }
+        targets.filter { it !in viaBle }.forEach { publish(fromCloud(it)) }
+        val client = ble ?: return
+        if (viaBle.isEmpty()) return
+        val byCreds = viaBle.entries.associate { (d, creds) -> creds!! to d }
+        client.readMany(byCreds.keys.toList()) { creds, dps ->
+            val d = byCreds.getValue(creds)
+            if (dps.isNullOrEmpty()) {
+                bleFailedAt[d.id] = SystemClock.uptimeMillis()
+                publish(fromCloud(d))
+            } else publish(withBluetooth(c, d, dps))
+        }
+    }
+
+    /** Ключ і MAC для Bluetooth (з хмари, раз на запуск); null — не BLE чи не вдалось. */
+    private suspend fun credentials(c: TuyaCloud, d: HomeDevice): BleCredentials? =
+        if (bleCreds.containsKey(d.id)) bleCreds[d.id] else try {
             c.bleCredentials(d.id).also { bleCreds[d.id] = it; Log.i(TAG, "${d.name}: Bluetooth ${it?.mac ?: "немає"}") }
         } catch (e: java.io.IOException) {
             Log.w(TAG, "${d.name}: відомості для Bluetooth — ${e.message}")
             null
         }
-        creds ?: return null
-        val dps = try { client.read(creds) } catch (e: Exception) { Log.w(TAG, "${d.name}: Bluetooth — ${e.message}"); null }
-        if (dps.isNullOrEmpty()) {
-            bleFailedAt[d.id] = SystemClock.uptimeMillis()
-            return null
-        }
+
+    /** Показники, прочитані по Bluetooth (dp id → значення), — у стан пристрою. */
+    private suspend fun withBluetooth(c: TuyaCloud, d: HomeDevice, dps: Map<Int, Any>): HomeDevice {
         val codes = dpCodes[d.id] ?: try { c.dpCodes(d.id).also { dpCodes[d.id] = it } } catch (e: java.io.IOException) { emptyMap() }
         val status = dps.mapNotNull { (id, v) -> (codes[id] ?: DEFAULT_DPS[d.category]?.get(id))?.let { it to (v as Any?) } }.toMap()
         Log.i(TAG, "${d.name} по Bluetooth: $status")
