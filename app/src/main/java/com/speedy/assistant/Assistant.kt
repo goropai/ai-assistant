@@ -898,6 +898,7 @@ class Assistant(
         pauseJob = null
         dialogue = false
         busyHint = null
+        busyOfferStop = true
         lastSpokeAt = SystemClock.uptimeMillis()
         commandJob = scope.launch {
             // Довго мовчить, а зайнята, — сказати, що ще працює (інакше незрозуміло, що відбувається).
@@ -2820,6 +2821,7 @@ class Assistant(
         face.setMood(Mood.HAPPY)
         say("Завантажую версію ${info.versionName}. Це займе кілька хвилин.")
         busyHint = "Ще завантажую оновлення"
+        busyOfferStop = false
         face.setMood(Mood.THINKING)
         val half = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { say("Половину завантажила.") }
         val apk = try {
@@ -2904,6 +2906,8 @@ class Assistant(
     @Volatile private var waitingForHuman = 0
     /** Чим зайнята — для "Ще шукаю казку…" (null — "Ще думаю"). Скидається на початку кожної дії. */
     @Volatile private var busyHint: String? = null
+    /** Чи підказувати "торкнись мене, щоб не чекати" (оновлення — ні: воно й так довге). */
+    @Volatile private var busyOfferStop = true
 
     /** Чекаємо людину (відповідь на уроці, обведення літери): мовчання тоді не означає "довго думаю". */
     private suspend fun <T> awaitingHuman(block: suspend () -> T): T {
@@ -2919,7 +2923,7 @@ class Assistant(
             if (speakingNow || waitingForHuman > 0 || quiet()) continue
             val silent = SystemClock.uptimeMillis() - lastSpokeAt
             if (silent < if (said == 0) BusyText.FIRST_MS else BusyText.NEXT_MS) continue
-            say(BusyText.progress(busyHint, said++))
+            say(BusyText.progress(busyHint, said++, busyOfferStop))
         }
     }
 

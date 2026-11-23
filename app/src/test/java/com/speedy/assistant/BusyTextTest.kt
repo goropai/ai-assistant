@@ -13,6 +13,8 @@ class BusyTextTest {
         // Третій раз — підказати, як зупинити.
         assertTrue(BusyText.progress("Ще шукаю казку", 2).contains("торкнись мене"))
         assertEquals("Ще завантажую оновлення…", BusyText.progress("Ще завантажую оновлення", 5))
+        // Оновлення — без "торкнись мене": зупиняти немає сенсу.
+        assertEquals("Ще завантажую оновлення…", BusyText.progress("Ще завантажую оновлення", 2, offerStop = false))
         assertTrue(BusyText.NEXT_MS > BusyText.FIRST_MS)
     }
 }
