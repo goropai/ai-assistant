@@ -350,6 +350,10 @@ class MainActivity : AppCompatActivity() {
                 read = { java.io.File(filesDir, "brushing.json").takeIf { it.exists() }?.readText() },
                 write = { text -> java.io.File(filesDir, "brushing.json").writeTextAtomic(text) },
             ),
+            brushStory = com.speedy.assistant.brushing.BrushStory(
+                read = { java.io.File(filesDir, "brushing-story.json").takeIf { it.exists() }?.readText() },
+                write = { text -> java.io.File(filesDir, "brushing-story.json").writeTextAtomic(text) },
+            ),
             things = thingMemory,
             home = smartHome,
             lookJson = { system, prompt, jpeg -> llm.generateJson(system, prompt, jpeg, paidOnly = settings.thingsPaidOnly) },

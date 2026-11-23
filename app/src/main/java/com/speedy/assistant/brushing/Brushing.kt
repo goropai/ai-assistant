@@ -141,6 +141,89 @@ class BrushStars(private val read: () -> String?, private val write: (String) ->
     }
 }
 
+/**
+ * Казка під час чищення (files/brushing-story.json): у кожного своя — яку читаємо й з якого речення
+ * продовжувати; дочитані — щоб наступного разу була нова. [read]/[write] — файл; у тестах — пам'ять.
+ */
+class BrushStory(private val read: () -> String?, private val write: (String) -> Unit) {
+    data class Place(val title: String, val sentence: Int)
+
+    private val data: JSONObject = try { JSONObject(read() ?: "{}") } catch (e: Exception) { JSONObject() }
+
+    /** Яку казку продовжувати (null — нової ще не почали). */
+    fun current(name: String): Place? = data.optJSONObject(key(name))?.let { p ->
+        p.optString("title").takeIf { it.isNotBlank() }?.let { Place(it, p.optInt("sentence")) }
+    }
+
+    /**
+     * Яку почати: підготовлену заздалегідь ([upcoming]), інакше першу з [TALES], якої ще не читали; null — нових
+     * немає (тоді модель вибере ще не читану, а повтор — лише в крайньому разі: [oldestDone]). [skip] — не знайшлися.
+     */
+    fun next(name: String, skip: Set<String> = emptySet()): String? {
+        val done = done(name)
+        upcoming(name)?.takeIf { it !in done && it !in skip }?.let { return it }
+        return TALES.firstOrNull { it !in done && it !in skip }
+    }
+
+    /** Казка на наступний раз, уже знайдена й збережена (готує Спіді після чищення). */
+    fun upcoming(name: String): String? = data.optJSONObject(key(name))?.optString("upcoming")?.takeIf { it.isNotBlank() }
+
+    fun setUpcoming(name: String, title: String) {
+        person(name).put("upcoming", title)
+        write(data.toString())
+    }
+
+    /** Найдавніше дочитана — повторити, лише коли нової не знайти ніяк. */
+    fun oldestDone(name: String, skip: Set<String> = emptySet()): String? = done(name).firstOrNull { it !in skip }
+
+    /** Які вже читали (і яку читаємо) — щоб модель їх не пропонувала. */
+    fun known(name: String): List<String> = done(name) + listOfNotNull(current(name)?.title, upcoming(name))
+
+    /** Дочитали до речення [sentence] (з нього — наступного разу). */
+    fun save(name: String, title: String, sentence: Int) {
+        person(name).put("title", title).put("sentence", sentence)
+        write(data.toString())
+    }
+
+    /** Казку дочитали: наступного разу — нова. */
+    fun finish(name: String, title: String) {
+        val p = person(name)
+        val done = done(name).toMutableList().apply { remove(title); add(title) }
+        p.remove("title")
+        p.remove("sentence")
+        if (p.optString("upcoming") == title) p.remove("upcoming")
+        p.put("done", org.json.JSONArray(done))
+        write(data.toString())
+    }
+
+    private fun done(name: String): List<String> =
+        data.optJSONObject(key(name))?.optJSONArray("done")?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+
+    private fun person(name: String): JSONObject = data.optJSONObject(key(name)) ?: JSONObject().also { data.put(key(name), it) }
+
+    private fun key(name: String) = name.lowercase()
+
+    companion object {
+        /** Завдання моделі: нова казка (не з [known]), коротка, повний текст якої є в інтернеті; JSON {"title"}. */
+        fun pickPrompt(known: List<String>) =
+            "Назви одну українську народну або класичну дитячу казку для дитини 4–7 років, коротку (3–6 хвилин " +
+                "читання), повний текст якої легко знайти в інтернеті українською. Не з цих: " +
+                known.joinToString(", ").ifEmpty { "—" } + ". Відповідь — JSON {\"title\": \"назва казки\"}."
+
+        /** Назва з відповіді моделі; null — не розібрали чи вона з уже відомих. */
+        fun parsePick(json: String?, known: List<String>): String? {
+            val title = try { JSONObject(json ?: return null).optString("title").trim().trim('«', '»', '"', '.') } catch (e: Exception) { return null }
+            return title.takeIf { it.length in 2..60 && known.none { k -> k.equals(it, ignoreCase = true) } }
+        }
+
+        /** Народні казки — короткі (2–3 чищення), повним текстом є в інтернеті. Для перших казок і без моделі. */
+        val TALES = listOf(
+            "Колобок", "Рукавичка", "Котик і півник", "Пан Коцький", "Коза-дереза", "Солом'яний бичок",
+            "Кривенька качечка", "Лисичка-сестричка і вовк-панібрат", "Колосок", "Івасик-Телесик",
+        )
+    }
+}
+
 /** Слова після чищення (і на "мої зірочки"). */
 object BrushText {
     fun days(n: Int) = when {
@@ -172,6 +255,31 @@ object BrushText {
             ?: if (r.streak >= 2) append("Уже ${days(r.streak)} поспіль. ") else Unit
         append("Усього в тебе ${stars(r.total)}.")
     }.trim()
+
+    /** Перед першим реченням казки. */
+    fun taleStart(title: String, continued: Boolean) =
+        if (continued) "А поки чистимо — продовжуємо казку «$title»." else "А поки чистимо — казка «$title»!"
+
+    /** Час вийшов, а казка ще не скінчилась. */
+    const val TO_BE_CONTINUED = "Ой, а що ж було далі? Дізнаємось наступного разу, як чиститимемо зубки!"
+    const val TALE_END = "От і казці кінець!"
+    const val ASK_FINISH = "А казки залишилось зовсім трохи. Дочитати до кінця?"
+    const val LATER = "Добре, дочитаємо наступного разу!"
+
+    /** Казки лишилось не більше стількох символів (~пів хвилини читання) — питаємо, чи дочитати. */
+    const val FINISH_MAX_CHARS = 700
+
+    fun littleLeft(sentences: List<String>, from: Int) = sentences.drop(from).sumOf { it.length } in 1..FINISH_MAX_CHARS
+
+    /** Відповідь "дочитати?": true — так, false — ні (чи "потім"), null — не зрозуміли. Спершу "ні" ("не треба"). */
+    fun yes(texts: List<String>?): Boolean? {
+        for (t in texts.orEmpty()) {
+            val p = " " + t.lowercase().replace(Regex("[,!?.]"), " ").replace(Regex("\\s+"), " ").trim() + " "
+            if (Regex(" (ні|нє|не треба|не хочу|потім|наступного разу|завтра|досить) ").containsMatchIn(p)) return false
+            if (Regex(" (так|ага|угу|давай|дочитай|дочитуй|хочу|звісно|звичайно|да|читай) ").containsMatchIn(p)) return true
+        }
+        return null
+    }
 
     fun summary(total: Int, streak: Int, today: Int): String = when {
         total == 0 -> "Зірочок ще немає. Скажи «Спіді, я чищу зуби» — і заробимо першу!"

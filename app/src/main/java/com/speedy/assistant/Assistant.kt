@@ -144,6 +144,8 @@ class Assistant(
     /** Чищення зубів: екран із зубами й зірочки (files/brushing.json). */
     private val brushScreen: com.speedy.assistant.brushing.BrushScreen? = null,
     private val brushStars: com.speedy.assistant.brushing.BrushStars? = null,
+    /** Казка під час чищення: яку й до якого речення читали (files/brushing-story.json). */
+    private val brushStory: com.speedy.assistant.brushing.BrushStory? = null,
     /** Запит до "мозку" за JSON (уроки, цікаві факти); null — не вдалось. */
     private val generateJson: suspend (system: String, prompt: String) -> String? = { _, _ -> null },
     /** Прогрес уроків математики, логіки тощо. */
@@ -1549,18 +1551,107 @@ class Assistant(
         }
     }
 
+    /** Казка під час чищення: речення й з якого продовжувати. */
+    private class BrushTale(val title: String, val sentences: List<String>, var next: Int, val continued: Boolean)
+
     /**
-     * Чищення зубів: дві хвилини по зонах (малюнок оновлюється сам, фрази — за секундами; запізніле
-     * підбадьорення пропускаємо, зміну зони — ні). ≥ 90 с (навіть якщо зупинили дотиком) — зірочка.
+     * Казка для чищення: та, що не дочитали, інакше підготовлена чи нова (вибирає модель); повтор — лише
+     * якщо нової не знайти ніяк. null — немає.
+     */
+    private suspend fun brushTale(name: String): BrushTale? {
+        val story = brushStory ?: return null
+        val place = story.current(name)
+        val tried = mutableSetOf<String>()
+        suspend fun another() = story.next(name, tried) ?: pickTale(name, tried) ?: story.oldestDone(name, tried)
+        var title = place?.title ?: another() ?: return null
+        repeat(MAX_BRUSH_TALE_TRIES) {
+            val file = savedOrFullTale(title)
+            if (file != null) {
+                val sentences = withContext(Dispatchers.IO) { com.speedy.assistant.books.Sentences.split(file.readText()) }
+                val start = if (place?.title == title) place.sentence else 0
+                if (start < sentences.size) return BrushTale(title, sentences, start, continued = start > 0)
+                story.finish(name, title)
+            }
+            tried += title
+            title = another() ?: return null
+        }
+        return null
+    }
+
+    /**
+     * Чищення скінчилось, а казка ні: лишилось трохи — спитати, чи дочитати ("ні" чи тиша — наступного
+     * разу); багато — "далі буде".
+     */
+    private suspend fun endBrushTale(name: String, t: BrushTale) {
+        val text = com.speedy.assistant.brushing.BrushText
+        when {
+            t.next >= t.sentences.size -> { brushStory?.finish(name, t.title); say(text.TALE_END) }
+            text.littleLeft(t.sentences, t.next) -> {
+                say(text.ASK_FINISH)
+                val yes = text.yes(listenIn("uk-UA"))
+                Log.i(TAG, "казка після чищення — дочитати? $yes")
+                if (yes == true) {
+                    face.setMood(Mood.HAPPY)
+                    while (t.next < t.sentences.size) say(t.sentences[t.next++])
+                    brushStory?.finish(name, t.title)
+                    say(text.TALE_END)
+                } else {
+                    brushStory?.save(name, t.title, t.next)
+                    say(text.LATER)
+                }
+            }
+            else -> { brushStory?.save(name, t.title, t.next); say(text.TO_BE_CONTINUED) }
+        }
+    }
+
+    /** Нова казка від моделі (не з прочитаних і не з [skip]); null — модель не відповіла. */
+    private suspend fun pickTale(name: String, skip: Set<String>): String? {
+        val story = brushStory ?: return null
+        val known = story.known(name) + skip
+        val prompt = com.speedy.assistant.brushing.BrushStory.pickPrompt(known)
+        return com.speedy.assistant.brushing.BrushStory.parsePick(generateJson(TALE_PICK_SYSTEM, prompt), known)
+            ?.also { Log.i(TAG, "нова казка для чищення: $it") }
+    }
+
+    /** Після чищення — у фоні знайти й зберегти казку на наступний раз (щоб почати без чекання). */
+    private fun prefetchBrushTale(name: String) {
+        val story = brushStory ?: return
+        if (story.upcoming(name) != null) return
+        scope.launch {
+            try {
+                val skip = story.known(name).toMutableSet()
+                repeat(MAX_BRUSH_TALE_TRIES) {
+                    val title = story.next(name, skip) ?: pickTale(name, skip) ?: return@launch
+                    if (savedOrFullTale(title) != null) {
+                        story.setUpcoming(name, title)
+                        Log.i(TAG, "казка на наступне чищення ($name): $title")
+                        return@launch
+                    }
+                    skip += title
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "казка на наступне чищення: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Чищення зубів: дві хвилини по зонах (малюнок оновлюється сам). Зміна зони — завжди вчасно; між ними —
+     * казка по реченню (продовжується наступного разу), а поки її немає (вантажиться, немає інтернету) —
+     * підбадьорення (запізніле пропускаємо). ≥ 90 с (навіть якщо зупинили дотиком) — зірочка.
      */
     private suspend fun brushTeeth(stars: com.speedy.assistant.brushing.BrushStars, name: String) {
         val plan = com.speedy.assistant.brushing.BrushPlan
+        val text = com.speedy.assistant.brushing.BrushText
         Log.i(TAG, "чищення зубів: $name")
         inConversation = false
         face.setMood(Mood.HAPPY)
         brushScreen?.show()
         val started = SystemClock.uptimeMillis()
-        fun seconds() = ((SystemClock.uptimeMillis() - started) / 1000.0).coerceAtMost(plan.TOTAL_S.toDouble())
+        fun elapsed() = (SystemClock.uptimeMillis() - started) / 1000.0
+        fun seconds() = elapsed().coerceAtMost(plan.TOTAL_S.toDouble())
         val drawing = scope.launch {
             while (true) {
                 val s = seconds()
@@ -1569,35 +1660,68 @@ class Assistant(
                 delay(BRUSH_FRAME_MS)
             }
         }
+        // Казка вантажиться, поки чистимо першу зону.
+        val taleLoad = scope.async {
+            try { brushTale(name) } catch (e: CancellationException) { throw e } catch (e: Exception) { Log.w(TAG, "казка для чищення: ${e.message}"); null }
+        }
+        var tale: BrushTale? = null
+        var taleEnded = false
         val seed = kotlin.random.Random.nextInt(100)
+        val cheers = (1 until plan.TOTAL_S).filter { it % plan.ZONE_S != 0 && plan.line(it, seed) != null }.toMutableList()
+        var nextZone = 0
         var recorded = false
         try {
-            for (second in 0 until plan.TOTAL_S) {
-                val line = plan.line(second, seed) ?: continue
-                val wait = started + second * 1000L - SystemClock.uptimeMillis()
-                if (wait > 0) delay(wait)
-                val zoneChange = second % plan.ZONE_S == 0
-                if (zoneChange || seconds() - second < BRUSH_LATE_S) say(line)
+            while (elapsed() < plan.TOTAL_S) {
+                val now = elapsed()
+                if (now >= nextZone && nextZone < plan.TOTAL_S) {
+                    say(plan.line(nextZone, seed)!!)
+                    nextZone += plan.ZONE_S
+                    continue
+                }
+                if (tale == null && !taleEnded && taleLoad.isCompleted) tale = taleLoad.await()?.also { say(text.taleStart(it.title, it.continued)) }
+                val t = tale
+                if (t != null && !taleEnded) {
+                    if (t.next < t.sentences.size) {
+                        say(t.sentences[t.next++])
+                    } else {
+                        // Дочитали раніше, ніж скінчилось чищення: наступного разу — нова казка.
+                        taleEnded = true
+                        brushStory?.finish(name, t.title)
+                        say(text.TALE_END)
+                    }
+                    continue
+                }
+                // Казки немає — підбадьорення (запізніле — ні).
+                val due = cheers.firstOrNull { it <= now }
+                if (due != null) {
+                    cheers.remove(due)
+                    if (now - due < BRUSH_LATE_S) say(plan.line(due, seed)!!)
+                    continue
+                }
+                delay(BRUSH_FRAME_MS)
             }
-            val left = started + plan.TOTAL_S * 1000L - SystemClock.uptimeMillis()
-            if (left > 0) delay(left)
             drawing.cancel()
             brushScreen?.update(com.speedy.assistant.brushing.BrushPlan.Zone.LOWER_RIGHT, 1f, 1f)
             val result = stars.record(name, System.currentTimeMillis())
             recorded = true
-            Log.i(TAG, "чищення зубів ($name): $result")
+            Log.i(TAG, "чищення зубів ($name): $result, казка ${tale?.title} до ${tale?.next}/${tale?.sentences?.size}")
             face.setMood(Mood.HAPPY)
             val female = when (profiles?.gender(name)) {
                 com.speedy.assistant.people.Gender.FEMALE -> true
                 com.speedy.assistant.people.Gender.MALE -> false
                 else -> null
             }
-            say(com.speedy.assistant.brushing.BrushText.finished(result, female))
+            say(text.finished(result, female))
+            tale?.takeIf { !taleEnded }?.let { endBrushTale(name, it); taleEnded = true }
         } finally {
             drawing.cancel()
+            taleLoad.cancel()
             brushScreen?.hide()
-            // Зупинили дотиком майже наприкінці — зірочка однаково заслужена (мовчки: дотик — це "тихо").
+            // Зупинили дотиком: казку — з того ж місця наступного разу.
+            tale?.takeIf { !taleEnded }?.let { brushStory?.save(name, it.title, it.next) }
+            // Зупинили майже наприкінці — зірочка однаково заслужена (мовчки: дотик — це "тихо").
             if (!recorded && seconds() >= plan.COUNTS_FROM_S) stars.record(name, System.currentTimeMillis())
+            prefetchBrushTale(name)
         }
     }
 
@@ -2178,7 +2302,6 @@ class Assistant(
     /** Коли востаннє читала книгу: "продовжуй" одразу після — це про книгу. */
     private var lastReadAt = Long.MIN_VALUE / 2
 
-    /** @return false — це не про книги (хай відповідає модель). */
     /** Казка: є серед книг (чи вже знаходили) — читаємо; інакше шукаємо текст в інтернеті й читаємо. */
     private suspend fun handleTale(query: String): Boolean {
         val shelf = books ?: return false
@@ -2186,10 +2309,7 @@ class Assistant(
         Log.i(TAG, "казка: $query")
         face.setMood(Mood.THINKING)
         val local = if (hasFileAccess()) withContext(Dispatchers.IO) { shelf.find(query) } else null
-        val saved = withContext(Dispatchers.IO) {
-            dir.listFiles()?.filter { it.isFile }?.let { files -> com.speedy.assistant.books.Bookshelf.best(query, files) }
-        }
-        (local ?: saved)?.let { readBook(it, from = Place(0, 0)); return true }
+        (local ?: savedTale(query))?.let { readBook(it, from = Place(0, 0)); return true }
         say("Шукаю казку в інтернеті, хвилинку.")
         busyHint = "Ще шукаю казку"
         // Повний текст — зі сторінки (модель з пошуком бачить лише уривки й переказує); немає — переказ моделі.
@@ -2210,6 +2330,25 @@ class Assistant(
         return true
     }
 
+    /** Казка, яку вже знаходили (files/kazky); null — ще ні. */
+    private suspend fun savedTale(query: String): File? {
+        val dir = talesDir ?: return null
+        return withContext(Dispatchers.IO) {
+            dir.listFiles()?.filter { it.isFile }?.let { files -> com.speedy.assistant.books.Bookshelf.best(query, files) }
+        }
+    }
+
+    /** Знайдена раніше чи повний текст з інтернету (зберегти); null — не знайшлося. Переказу тут немає. */
+    private suspend fun savedOrFullTale(query: String): File? {
+        savedTale(query)?.let { return it }
+        val dir = talesDir ?: return null
+        val found = fullTale(query) ?: return null
+        return withContext(Dispatchers.IO) {
+            dir.mkdirs()
+            File(dir, com.speedy.assistant.books.Tales.fileName(found.title)).also { it.writeTextAtomic(found.text) }
+        }
+    }
+
     /** Повний текст казки з першої сторінки пошуку, де він є; null — не знайшлося. */
     private suspend fun fullTale(query: String): com.speedy.assistant.books.Tales.Found? {
         val pages = findPages(com.speedy.assistant.books.Tales.pagesQuery(query)).take(MAX_TALE_PAGES)
@@ -2225,6 +2364,7 @@ class Assistant(
         return null
     }
 
+    /** @return false — це не про книги (хай відповідає модель). */
     private suspend fun handleBook(cmd: BookCommand): Boolean {
         val shelf = books ?: return false
         // "Продовжуй" після паузи аудіо у VLC (дотик) — грає далі.
@@ -3236,6 +3376,9 @@ class Assistant(
         /** Чищення зубів: як часто перемальовувати зуби; підбадьорення, запізніле на стільки секунд, — не казати. */
         const val BRUSH_FRAME_MS = 200L
         const val BRUSH_LATE_S = 4
+        /** Скільки казок спробувати знайти для чищення, якщо якоїсь немає в інтернеті. */
+        const val MAX_BRUSH_TALE_TRIES = 3
+        const val TALE_PICK_SYSTEM = "Ти добираєш дитячі казки українською. Відповідай лише JSON."
         /** Скільки сторінок з пошуку відкривати в пошуках тексту казки. */
         const val MAX_TALE_PAGES = 5
         /** Підтека для переказу казки (лише останній; серед знайдених казок не шукаємо). */

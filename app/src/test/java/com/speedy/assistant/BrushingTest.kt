@@ -3,6 +3,7 @@ package com.speedy.assistant
 import com.speedy.assistant.brushing.BrushCommands
 import com.speedy.assistant.brushing.BrushPlan
 import com.speedy.assistant.brushing.BrushStars
+import com.speedy.assistant.brushing.BrushStory
 import com.speedy.assistant.brushing.BrushText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -74,5 +75,55 @@ class BrushingTest {
         )
         assertTrue(BrushText.finished(r.copy(newStar = false, milestone = null), female = true).contains("отримала"))
         assertTrue(BrushText.summary(0, 0, 0).contains("першу"))
+    }
+
+    @Test
+    fun story() {
+        var file: String? = null
+        val story = BrushStory(read = { file }, write = { file = it })
+        assertNull(story.current("Ліна"))
+        assertEquals("Колобок", story.next("Ліна"))
+        // Не дочитали — наступного разу з того ж речення (і після перезапуску).
+        story.save("Ліна", "Колобок", 14)
+        assertEquals(BrushStory.Place("Колобок", 14), BrushStory(read = { file }, write = {}).current("ліна"))
+        // Дочитали — нова казка; не знайшлась — наступна після неї.
+        story.finish("Ліна", "Колобок")
+        assertNull(story.current("Ліна"))
+        assertEquals("Рукавичка", story.next("Ліна"))
+        assertEquals("Котик і півник", story.next("Ліна", skip = setOf("Рукавичка")))
+        // У кожного своя.
+        assertEquals("Колобок", story.next("Тарас"))
+        // Підготовлена на наступний раз — першою; дочитали її — більше не пропонується.
+        story.setUpcoming("Ліна", "Ріпка")
+        assertEquals("Ріпка", story.next("Ліна"))
+        story.finish("Ліна", "Ріпка")
+        assertNull(story.upcoming("Ліна"))
+        // Усі зі списку дочитали — не по колу: нову вибере модель, повтор — лише найдавнішої.
+        BrushStory.TALES.forEach { story.finish("Ліна", it) }
+        assertNull(story.next("Ліна"))
+        assertEquals("Ріпка", story.oldestDone("Ліна")) // найдавніше дочитана (Колобок — щойно вдруге)
+        assertEquals(true, "Ріпка" in story.known("Ліна"))
+        // Відповідь моделі: нова — так, уже відома — ні.
+        assertEquals("Вовк і семеро козенят", BrushStory.parsePick("""{"title": "«Вовк і семеро козенят»"}""", story.known("Ліна")))
+        assertNull(BrushStory.parsePick("""{"title": "колобок"}""", story.known("Ліна")))
+        assertNull(BrushStory.parsePick("не JSON", emptyList()))
+        assertEquals(true, BrushStory.pickPrompt(listOf("Колобок")).contains("Колобок"))
+        assertEquals("А поки чистимо — продовжуємо казку «Колобок».", BrushText.taleStart("Колобок", continued = true))
+    }
+
+    @Test
+    fun askToFinish() {
+        val sentences = listOf("а".repeat(500), "б".repeat(300), "в".repeat(300))
+        assertEquals(false, BrushText.littleLeft(sentences, 0)) // 1100 — багато
+        assertEquals(true, BrushText.littleLeft(sentences, 1)) // 600 — трохи
+        assertEquals(false, BrushText.littleLeft(sentences, 3)) // нічого не лишилось
+        assertEquals(true, BrushText.yes(listOf("так")))
+        assertEquals(true, BrushText.yes(listOf("давай дочитай")))
+        assertEquals(false, BrushText.yes(listOf("ні")))
+        assertEquals(false, BrushText.yes(listOf("не треба")))
+        assertEquals(false, BrushText.yes(listOf("потім")))
+        assertEquals(false, BrushText.yes(listOf("давай наступного разу")))
+        assertNull(BrushText.yes(listOf("а що там було")))
+        assertNull(BrushText.yes(null))
     }
 }
