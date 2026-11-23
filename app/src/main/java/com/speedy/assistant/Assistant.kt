@@ -897,7 +897,11 @@ class Assistant(
         pauseJob?.cancel()
         pauseJob = null
         dialogue = false
+        busyHint = null
+        lastSpokeAt = SystemClock.uptimeMillis()
         commandJob = scope.launch {
+            // Довго мовчить, а зайнята, — сказати, що ще працює (інакше незрозуміло, що відбувається).
+            val watch = launch { busyWatch() }
             try {
                 delay(VoiceListener.UNMUTE_DELAY_MS) // поки розпізнавач не замовкне, звук приглушено
                 block()
@@ -915,6 +919,7 @@ class Assistant(
                     else -> "Ой, щось пішло не так."
                 })
             } finally {
+                watch.cancel()
                 face.setSpeaking(false)
                 busy = false
                 onBusyChanged(false)
@@ -1473,8 +1478,7 @@ class Assistant(
     private fun lessonIO() = object : com.speedy.assistant.english.LessonIO {
         override suspend fun say(uk: String) = this@Assistant.say(uk)
         override suspend fun sayEnglish(en: String) {
-            face.setSpeaking(true)
-            try { voice.speak(en, english = true) } finally { face.setSpeaking(false) }
+            speech { voice.speak(en, english = true) }
         }
         override suspend fun listen(english: Boolean) = listenLesson(english)
         override suspend fun cheer() { face.setMood(Mood.HAPPY); buzzer?.cheer(); chirps.play(Chirp.HAPPY) }
@@ -1606,7 +1610,7 @@ class Assistant(
         val lesson = com.speedy.assistant.school.WritingLesson(lessonIO(), t, progress, name, now = { System.currentTimeMillis() })
         val start = System.currentTimeMillis()
         try {
-            lesson.run()
+            awaitingHuman { lesson.run() } // поки дитина обводить — мовчання нормальне
         } finally {
             t.hide()
         }
@@ -1638,7 +1642,7 @@ class Assistant(
         face.setMood(Mood.LISTENING)
         try {
             ears.start(listenNow = true)
-            val texts = kotlinx.coroutines.withTimeoutOrNull(LESSON_LISTEN_MS) { answer.await() }
+            val texts = awaitingHuman { kotlinx.coroutines.withTimeoutOrNull(LESSON_LISTEN_MS) { answer.await() } }
             ears.stop()
             delay(VoiceListener.UNMUTE_DELAY_MS) // звук ще приглушений після розпізнавача
             return texts
@@ -2186,6 +2190,7 @@ class Assistant(
         }
         (local ?: saved)?.let { readBook(it, from = Place(0, 0)); return true }
         say("Шукаю казку в інтернеті, хвилинку.")
+        busyHint = "Ще шукаю казку"
         // Повний текст — зі сторінки (модель з пошуком бачить лише уривки й переказує); немає — переказ моделі.
         val page = fullTale(query)
         val found = page ?: findText?.invoke(com.speedy.assistant.books.Tales.prompt(query))
@@ -2813,9 +2818,26 @@ class Assistant(
         }
 
         face.setMood(Mood.HAPPY)
-        say("Завантажую версію ${info.versionName}.")
+        say("Завантажую версію ${info.versionName}. Це займе кілька хвилин.")
+        busyHint = "Ще завантажую оновлення"
         face.setMood(Mood.THINKING)
-        val apk = updater.download(info)
+        val half = scope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) { say("Половину завантажила.") }
+        val apk = try {
+            // Половина за менше ніж 20 с — скоро й усе, зайва репліка лише заважає.
+            updater.download(info) { elapsed -> if (elapsed >= BusyText.FIRST_MS) half.start() }
+        } catch (e: java.io.IOException) {
+            // Стоїть чи обірвалось (не "мозок" — це завантаження): не лишаємось зайнятою, кажемо як є.
+            half.cancel()
+            Log.w(TAG, "оновлення не завантажилось: ${e.message}")
+            face.setMood(Mood.SAD)
+            return say(
+                if (e is com.speedy.assistant.update.SlowDownloadException || e is java.net.SocketTimeoutException)
+                    "Оновлення качається дуже повільно — інтернет зараз слабкий. Скажи «оновись» ще раз трохи згодом."
+                else "Не вдалося завантажити оновлення. Скажи «оновись» ще раз трохи згодом.",
+            )
+        }
+        // Розмір невідомий — "половину" так і не сказали; join() запустив би її вже наприкінці.
+        if (half.isActive) half.join() else half.cancel()
         if (!updater.canInstall()) {
             face.setMood(Mood.SAD)
             say("Дозволь встановлення з невідомих джерел, а потім скажи «Спіді, оновись» ще раз.")
@@ -2855,21 +2877,49 @@ class Assistant(
             return say(text)
         }
         Log.d(TAG, "каже ($lang): $text")
-        face.setSpeaking(true)
-        try {
-            voice.speak(text, locale = lang.locale)
-        } finally {
-            face.setSpeaking(false)
-        }
+        speech { voice.speak(text, locale = lang.locale) }
     }
 
     private suspend fun say(text: String) {
         Log.d(TAG, "каже: $text")
+        speech { voice.speak(text) }
+    }
+
+    /** Обличчя "говорить", і запам'ятати, коли Спіді востаннє говорила (для [busyWatch]). */
+    private suspend fun speech(block: suspend () -> Unit) {
         face.setSpeaking(true)
+        speakingNow = true
         try {
-            voice.speak(text)
+            block()
         } finally {
+            speakingNow = false
+            lastSpokeAt = SystemClock.uptimeMillis()
             face.setSpeaking(false)
+        }
+    }
+
+    /** Коли Спіді востаннє говорила; чи говорить зараз; скільки чекаємо людину (тоді мовчання — нормальне). */
+    @Volatile private var lastSpokeAt = 0L
+    @Volatile private var speakingNow = false
+    @Volatile private var waitingForHuman = 0
+    /** Чим зайнята — для "Ще шукаю казку…" (null — "Ще думаю"). Скидається на початку кожної дії. */
+    @Volatile private var busyHint: String? = null
+
+    /** Чекаємо людину (відповідь на уроці, обведення літери): мовчання тоді не означає "довго думаю". */
+    private suspend fun <T> awaitingHuman(block: suspend () -> T): T {
+        waitingForHuman++
+        try { return block() } finally { waitingForHuman--; lastSpokeAt = SystemClock.uptimeMillis() }
+    }
+
+    /** Поки зайнята: мовчить понад [BusyText.FIRST_MS] — коротко сказати, що ще працює; далі — рідше. */
+    private suspend fun busyWatch() {
+        var said = 0
+        while (true) {
+            delay(1_000)
+            if (speakingNow || waitingForHuman > 0 || quiet()) continue
+            val silent = SystemClock.uptimeMillis() - lastSpokeAt
+            if (silent < if (said == 0) BusyText.FIRST_MS else BusyText.NEXT_MS) continue
+            say(BusyText.progress(busyHint, said++))
         }
     }
 
@@ -3020,6 +3070,7 @@ class Assistant(
                 } else {
                     // Датчик лише з Bluetooth: розмова з ним — до хвилини, тож попередити. Кожен кажемо, щойно прочитали.
                     say("Хвилинку, питаю по Bluetooth.")
+                    busyHint = "Ще чекаю на датчик"
                     h.refreshEach(targets) { say(com.speedy.assistant.home.HomeText.state(it, h.scales(it)) + ".") }
                 }
             }

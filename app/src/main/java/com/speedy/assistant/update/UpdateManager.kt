@@ -17,6 +17,47 @@ import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
 
+private const val TAG = "UpdateManager"
+
+/** Завантаження майже стоїть — кидаємо (Спіді на час завантаження зайнята й не слухає). */
+class SlowDownloadException(message: String) : IOException(message)
+
+/**
+ * Темп завантаження: що писати в журнал і чи не стоїть. За останнє [windowMs] прийшло менше [minBytes] —
+ * занадто повільно. [now] — мс (у тестах — свій годинник).
+ */
+class DownloadPace(
+    private val startMs: Long,
+    private val windowMs: Long = 60_000,
+    private val minBytes: Long = 256 * 1024,
+    private val logEveryMs: Long = 30_000,
+) {
+    private var total = 0L
+    private var windowStart = startMs
+    private var windowBytes = 0L
+    private var lastLog = startMs
+
+    val bytes: Long get() = total
+    val startedAt: Long get() = startMs
+
+    /** Прийшло [n] байт; true — занадто повільно (кидаємо). */
+    fun add(n: Int, now: Long): Boolean {
+        total += n
+        windowBytes += n
+        if (now - windowStart < windowMs) return false
+        val slow = windowBytes < minBytes
+        windowStart = now
+        windowBytes = 0
+        return slow
+    }
+
+    /** Чи час написати в журнал (раз на [logEveryMs]). */
+    fun shouldLog(now: Long): Boolean = (now - lastLog >= logEveryMs).also { if (it) lastLog = now }
+
+    /** Середня швидкість, КБ/с. */
+    fun kbPerSecond(now: Long): Long = if (now <= startMs) 0 else total * 1000 / 1024 / (now - startMs)
+}
+
 data class UpdateInfo(
     val versionCode: Int,
     val versionName: String,
@@ -74,7 +115,11 @@ class UpdateManager(
         info.takeIf { it.versionCode > currentVersionCode }
     }
 
-    suspend fun download(info: UpdateInfo): File = withContext(Dispatchers.IO) {
+    /**
+     * Завантажити APK; [onHalf] — один раз, коли завантажено половину (якщо розмір відомий), з часом від початку (мс).
+     * @throws SlowDownloadException завантаження майже стоїть ([DownloadPace]).
+     */
+    suspend fun download(info: UpdateInfo, onHalf: (elapsedMs: Long) -> Unit = {}): File = withContext(Dispatchers.IO) {
         dir.mkdirs()
         dir.listFiles()?.forEach { it.delete() } // старі завантаження
         val target = File(dir, "speedy-${info.versionCode}.apk")
@@ -83,6 +128,10 @@ class UpdateManager(
         http.newCall(Request.Builder().url(info.apkUrl).build()).execute().use { response ->
             if (!response.isSuccessful) throw IOException("APK HTTP ${response.code}")
             val body = response.body ?: throw IOException("Порожній APK")
+            val size = body.contentLength()
+            val pace = DownloadPace(android.os.SystemClock.uptimeMillis())
+            var halfSaid = false
+            fun mb(b: Long) = "%.1f".format(b / 1048576.0)
             body.byteStream().use { input ->
                 target.outputStream().use { output ->
                     val buffer = ByteArray(64 * 1024)
@@ -91,9 +140,20 @@ class UpdateManager(
                         if (read < 0) break
                         digest.update(buffer, 0, read)
                         output.write(buffer, 0, read)
+                        val now = android.os.SystemClock.uptimeMillis()
+                        if (pace.shouldLog(now)) {
+                            android.util.Log.i(TAG, "завантажую ${info.versionName}: ${mb(pace.bytes)} з ${if (size > 0) mb(size) else "?"} МБ, ${pace.kbPerSecond(now)} КБ/с")
+                        }
+                        if (pace.add(read, now)) {
+                            android.util.Log.w(TAG, "завантаження стоїть: ${mb(pace.bytes)} МБ за ${(now - pace.startedAt) / 1000} с — кидаю")
+                            target.delete()
+                            throw SlowDownloadException("APK качається занадто повільно")
+                        }
+                        if (!halfSaid && size > 0 && pace.bytes * 2 >= size) { halfSaid = true; onHalf(now - pace.startedAt) }
                     }
                 }
             }
+            android.util.Log.i(TAG, "завантажено ${info.versionName}: ${mb(pace.bytes)} МБ")
         }
 
         val actual = digest.digest().joinToString("") { "%02x".format(it) }
