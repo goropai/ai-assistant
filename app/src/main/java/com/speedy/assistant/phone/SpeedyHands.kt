@@ -51,7 +51,10 @@ class SpeedyHands : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) foreground = pkg
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            foreground = pkg
+            if ("packageinstaller" in pkg && android.os.SystemClock.uptimeMillis() < confirmOwnUpdateUntil) confirmOwnUpdate()
+        }
         // Натиснули чи гортають в іншому застосунку — людина там щось робить (див. VideoIdle).
         else if (pkg != packageName) lastUserActionAt = android.os.SystemClock.uptimeMillis()
     }
@@ -59,6 +62,46 @@ class SpeedyHands : AccessibilityService() {
     /** Коли востаннє натискали чи гортали в іншому застосунку (uptimeMillis). */
     @Volatile var lastUserActionAt = 0L
         private set
+
+    /**
+     * Спіді сама відкрила встановлювач зі своїм оновленням: до цього часу (uptimeMillis) натиснути там
+     * "Установити" — лише в системному встановлювачі й лише якщо на екрані саме Спіді.
+     */
+    @Volatile private var confirmOwnUpdateUntil = 0L
+
+    fun expectOwnUpdate(ms: Long) {
+        confirmOwnUpdateUntil = android.os.SystemClock.uptimeMillis() + ms
+    }
+
+    /** Кнопка з'являється не одразу (а на довгих екранах спершу "Далі") — кілька спроб. */
+    private fun confirmOwnUpdate() {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        for (delay in longArrayOf(300, 1_000, 2_000, 4_000)) handler.postDelayed({
+            if (android.os.SystemClock.uptimeMillis() < confirmOwnUpdateUntil && pressInstall()) confirmOwnUpdateUntil = 0
+        }, delay)
+    }
+
+    /** true — натиснули "Установити" (на екрані встановлювача саме Спіді); "Далі" — натискає й чекає далі. */
+    private fun pressInstall(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        if ("packageinstaller" !in root.packageName?.toString().orEmpty()) return false
+        val ours = applicationInfo.loadLabel(packageManager).toString()
+        var isOurs = false
+        var install: AccessibilityNodeInfo? = null
+        var next: AccessibilityNodeInfo? = null
+        walk(root) { n ->
+            val t = n.text?.toString()?.trim() ?: return@walk
+            if (t == ours) isOurs = true
+            if (n.isClickable && n.isEnabled) {
+                if (Regex("(?iu)^(установити|встановити|install)$").matches(t)) install = n
+                if (Regex("(?iu)^(далі|next)$").matches(t)) next = n
+            }
+        }
+        if (!isOurs) return false
+        install?.let { Log.i(TAG, "встановлювач: «Установити» (оновлення Спіді)"); return it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+        next?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        return false
+    }
 
     /** Пакет застосунку на екрані зараз. */
     fun topPackage(): String? = rootInActiveWindow?.packageName?.toString() ?: foreground.ifEmpty { null }
@@ -344,6 +387,33 @@ class SpeedyHands : AccessibilityService() {
         fun enabled(context: Context): Boolean =
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
                 .contains(context.packageName + "/")
+
+        /**
+         * Samsung вимикає службу після оновлення застосунку. Якщо власник дав дозвіл через adb
+         * (`pm grant … WRITE_SECURE_SETTINGS`), вмикаємо її назад самі — лише свою, чужі не чіпаємо.
+         * @return true — служба ввімкнена (була чи ввімкнули).
+         */
+        fun ensureEnabled(context: Context): Boolean {
+            if (enabled(context)) return true
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.WRITE_SECURE_SETTINGS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED) return false
+            val ours = android.content.ComponentName(context, SpeedyHands::class.java).flattenToString()
+            val cr = context.contentResolver
+            return try {
+                val list = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
+                Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, withService(list, ours))
+                Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                Log.i(TAG, "службу спеціальних можливостей увімкнено знову (після оновлення)")
+                true
+            } catch (e: SecurityException) {
+                Log.w(TAG, "увімкнути службу не вдалося: ${e.message}")
+                false
+            }
+        }
+
+        /** Список служб "a/b:c/d" з нашою (без дублів). */
+        fun withService(list: String, ours: String): String =
+            (list.split(':').filter { it.isNotBlank() && it != ours } + ours).joinToString(":")
     }
 }
 

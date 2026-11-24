@@ -166,6 +166,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Службу вимкнули (Samsung — після оновлення) — увімкнути назад, якщо власник дав дозвіл через adb.
+        com.speedy.assistant.phone.SpeedyHands.ensureEnabled(this)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Спіді — "обличчя" робота: показується поверх екрана блокування і вмикає екран,
         // інакше після випадкового блокування (кнопка, чуже вікно поверх) вона на паузі й не чує.

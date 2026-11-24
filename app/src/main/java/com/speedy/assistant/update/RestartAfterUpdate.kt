@@ -12,6 +12,8 @@ import com.speedy.assistant.MainActivity
 class RestartAfterUpdate : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        // Samsung вимикає службу спеціальних можливостей після оновлення — увімкнути назад (якщо є дозвіл).
+        com.speedy.assistant.phone.SpeedyHands.ensureEnabled(context)
         context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }
